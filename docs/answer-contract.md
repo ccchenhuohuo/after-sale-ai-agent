@@ -1,5 +1,7 @@
 # 售后答案格式
 
+当前 Agent 内部使用 Pydantic `SupportAnswer` 结构化输出，并由 runtime 渲染成以下中文客服参考格式。SDK output guardrail 会在渲染前检查结构化输出；runtime 还会对最终中文文本做本地 contract 校验。
+
 每次终端回答必须遵守以下结构和字段顺序：
 
 ```text

@@ -1,4 +1,10 @@
-from agent_runtime.copilot.answer_contract import validate_answer_contract
+from agent_runtime.copilot.answer_contract import (
+    SupportAnswer,
+    contract_issues_for_output,
+    render_support_answer,
+    validate_answer_contract,
+)
+from agent_runtime.copilot.evidence import HistoryEvidence, SupportEvidencePack
 
 
 VALID_EMPTY_EVIDENCE_ANSWER = """AI 客服参考
@@ -112,3 +118,88 @@ def test_negated_commitment_is_not_reported():
     issues = validate_answer_contract(answer)
 
     assert not any(issue.code == "forbidden_commitment" for issue in issues)
+
+
+def test_support_answer_renders_existing_customer_service_format():
+    answer = SupportAnswer(
+        issue_type="troubleshooting",
+        run_mode="Agent SDK",
+        confidence="低",
+        confidence_reason="未查询到可信正式依据。",
+        user_issue_summary="客户反馈设备异常。",
+        sku_match="未在 SKU 目录中命中；需要补充订单 SKU、包装 SKU、产品铭牌或图片。",
+        suggested_reply="建议先收集信息并人工确认。",
+        troubleshooting_steps=["确认型号", "收集截图"],
+        follow_up_questions=["请补充 SKU"],
+        official_evidence="未查询到可信正式依据，不可编造。",
+        history_reference="未查询到可信历史参考，不可编造。",
+        ticket_draft="不建议生成工单，并说明原因。",
+    )
+
+    rendered = render_support_answer(answer)
+
+    assert "AI 客服参考" in rendered
+    assert "问题类型：" in rendered
+    assert "troubleshooting" in rendered
+    assert "建议排查步骤：" in rendered
+    assert "1. 确认型号" in rendered
+    assert validate_answer_contract(rendered) == []
+
+
+def test_support_answer_contract_issues_for_forbidden_commitment():
+    answer = SupportAnswer(
+        issue_type="quality_issue",
+        run_mode="Agent SDK",
+        confidence="低",
+        confidence_reason="没有正式依据。",
+        user_issue_summary="客户反馈产品脱落。",
+        sku_match="SKU 命中置信度高，处理建议置信度低。",
+        suggested_reply="可以退款，直接换新。",
+        troubleshooting_steps=["收集图片"],
+        follow_up_questions=["请补充订单信息"],
+        official_evidence="未查询到可信正式依据，不可编造。",
+        history_reference="未查询到可信历史参考，不可编造。",
+        ticket_draft="建议生成工单草稿，缺失订单信息。",
+    )
+
+    issues = contract_issues_for_output(answer)
+
+    assert any(issue.code == "forbidden_commitment" for issue in issues)
+
+
+def test_support_answer_contract_uses_evidence_pack_for_history_markers():
+    answer = SupportAnswer(
+        issue_type="quality_issue",
+        run_mode="Agent SDK",
+        confidence="低",
+        confidence_reason="仅命中未审核历史参考。",
+        user_issue_summary="客户反馈产品脱落。",
+        sku_match="SKU 命中置信度高，处理建议置信度低。",
+        suggested_reply="建议先收集信息并人工确认。",
+        troubleshooting_steps=["收集图片"],
+        follow_up_questions=["请补充订单信息"],
+        official_evidence="未查询到可信正式依据，不可编造。",
+        history_reference="命中未审核历史参考，需人工确认，不能作为正式依据：thread:abc。",
+        ticket_draft="建议生成工单草稿，缺失订单信息。",
+    )
+    pack = SupportEvidencePack(
+        raw_issue_hash="hash",
+        query_chars=8,
+        issue_type="quality_issue",
+        product_model="",
+        sku=[],
+        official=[],
+        history=[
+            HistoryEvidence(
+                status="hit",
+                evidence_level="unreviewed_history",
+                verified=False,
+                query_hash="hash",
+                topic_id="thread:abc",
+            )
+        ],
+        media=[],
+    )
+
+    assert any(issue.code == "history_evidence" for issue in contract_issues_for_output(answer))
+    assert contract_issues_for_output(answer, evidence_pack=pack) == []

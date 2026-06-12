@@ -8,15 +8,17 @@
 
 ```mermaid
 flowchart TB
-    cli["终端对话<br/>chatcopilot"] --> agent["ulanzi after-sell copilot<br/>OpenAI Agents SDK"]
+    cli["终端对话<br/>chatcopilot"]
     feishu["飞书话题群<br/>SDK WebSocket"] --> bridge["Feishu bridge<br/>admission / dedup / queue / reply ledger"]
-    bridge --> agent
+    cli --> evidence["support evidence collector<br/>SKU / 正式 KB / 历史 / 媒体"]
+    bridge --> evidence
+    evidence --> agent["ulanzi after-sell copilot<br/>OpenAI Agents SDK"]
     bridge --> reply["SDK im.v1.message.areply<br/>reply_in_thread"]
-    agent --> sku["SKU 目录工具<br/>SKU / SPU / 负责人"]
-    agent --> official["正式知识库工具<br/>尚未接入"]
-    agent --> history["历史话题 RAG<br/>未审核历史参考"]
-    agent --> ticket["工单草稿工具"]
-    agent --> answer["结构化客服参考答案"]
+    evidence --> sku["SKU 目录<br/>SKU / SPU / 负责人"]
+    evidence --> official["正式知识库<br/>尚未接入"]
+    evidence --> history["历史话题 RAG<br/>未审核历史参考"]
+    evidence --> media["媒体观察证据<br/>未审核媒体参考"]
+    agent --> answer["Pydantic 结构化客服参考答案<br/>output guardrail + 中文渲染"]
 ```
 
 运行规则：
@@ -32,6 +34,8 @@ flowchart TB
 - `search_sku_catalog` 使用 `data/sku_catalog/` 下的真实合并 SKU 目录。
 - 正式知识库工具当前返回明确的“未查询到可信正式依据”。
 - `search_issue_history` 已接入飞书 raw JSON 历史话题 RAG，但只作为未审核历史参考，不能作为正式依据、政策依据或客户承诺依据。
+- 当前 v2 loop 由 runtime 先调用 `collect_support_evidence()` 并发收集 SKU、正式依据、历史参考和媒体观察证据，再把结构化证据包交给 Agent 生成 `SupportAnswer`。
+- Agent 最终输出经过 SDK output guardrail 和本地答案 contract 校验；终端和飞书仍渲染为原有中文 11 字段格式。
 - 答案不得编造正式文档、历史案例、链接、负责人、政策或技术结论。
 
 ## 运行方式
@@ -131,7 +135,7 @@ Agent 必须按以下顺序输出字段：
 ## 项目地图
 
 - `agent_mvp.py`：`ulanzi after-sell copilot` 的终端对话入口。
-- `src/agent_runtime/copilot/`：Agent prompt 和工具注册。
+- `src/agent_runtime/copilot/`：Agent prompt、结构化答案 contract、证据包模型和 evidence collector。
 - `src/agent_runtime/feishu/`：飞书 SDK 长连接、入站 gate、SQLite runtime store、per-thread queue 和线程内回复。
 - `src/agent_runtime/tools/sku_catalog.py`：合并 SKU 目录查询。
 - `src/agent_runtime/tools/rag.py`：正式知识库检索占位和混合证据打包入口，统一返回 SKU 精准匹配、文本历史参考和媒体观察证据。

@@ -2,11 +2,12 @@ import csv
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from agents import function_tool
 
-from agent_runtime.settings import get_settings
+from agent_runtime.copilot.evidence import SkuEvidence, render_sku_evidence, short_hash
+from agent_runtime.settings import Settings, get_settings
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -88,11 +89,20 @@ def _score_row(row: Dict[str, str], query: str) -> tuple[int, list[str]]:
     return score, reasons
 
 
-def search_sku_catalog_text(query: str, limit: int = 5) -> str:
-    settings = get_settings()
+def resolve_sku_evidence(query: str, limit: int = 5, settings: Optional[Settings] = None) -> list[SkuEvidence]:
+    settings = settings or get_settings()
+    query_hash = short_hash(query)
     rows = _load_catalog(settings.sku_catalog_path)
     if not rows:
-        return f"SKU目录未找到或为空：{settings.sku_catalog_path}"
+        return [
+            SkuEvidence(
+                status="error",
+                evidence_level="error",
+                verified=False,
+                query_hash=query_hash,
+                message=f"SKU目录未找到或为空：{settings.sku_catalog_path}",
+            )
+        ]
 
     scored: List[tuple[int, list[str], dict[str, str]]] = []
     for row in rows:
@@ -102,24 +112,38 @@ def search_sku_catalog_text(query: str, limit: int = 5) -> str:
     scored.sort(key=lambda item: (-item[0], item[2].get("sku_code", "")))
 
     if not scored:
-        return "未在SKU目录中命中。请向客服追问客户截图、订单SKU、包装SKU或产品铭牌信息。"
+        return [
+            SkuEvidence(
+                status="empty",
+                evidence_level="empty",
+                verified=False,
+                query_hash=query_hash,
+                message="未在SKU目录中命中。请向客服追问客户截图、订单SKU、包装SKU或产品铭牌信息。",
+            )
+        ]
 
-    lines = []
+    evidence: list[SkuEvidence] = []
     for score, reasons, row in scored[: max(1, min(limit, 10))]:
-        lines.append(
-            "\n".join(
-                [
-                    f"- SKU：{row.get('sku_code', '')}",
-                    f"  SPU：{row.get('spu', '')}",
-                    f"  SKU品名：{row.get('sku_name_cn', '')}",
-                    f"  产品名：{row.get('product_name_cn', '')}",
-                    f"  产品负责人：{row.get('product_owner_name', '')}",
-                    f"  命中分：{score}",
-                    f"  命中原因：{'、'.join(reasons)}",
-                ]
+        evidence.append(
+            SkuEvidence(
+                status="hit",
+                evidence_level="identity_only",
+                verified=True,
+                query_hash=query_hash,
+                sku=row.get("sku_code", ""),
+                spu=row.get("spu", ""),
+                sku_name_cn=row.get("sku_name_cn", ""),
+                product_name_cn=row.get("product_name_cn", ""),
+                product_owner_name=row.get("product_owner_name", ""),
+                score=float(score),
+                matched_reasons=reasons,
             )
         )
-    return "\n".join(lines)
+    return evidence
+
+
+def search_sku_catalog_text(query: str, limit: int = 5) -> str:
+    return render_sku_evidence(resolve_sku_evidence(query, limit=limit))
 
 
 @function_tool

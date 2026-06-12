@@ -21,38 +21,35 @@ from agent_mvp import (
 
 def test_prompt_keeps_terminal_answer_contract():
     required_sections = [
-        "问题类型",
-        "运行模式",
-        "置信度",
-        "用户问题摘要",
-        "SKU 命中",
-        "建议回复（供客服参考，可复制调整）",
-        "建议排查步骤",
-        "需要追问",
-        "正式依据",
-        "历史参考",
-        "工单草稿",
+        "issue_type",
+        "run_mode",
+        "confidence",
+        "user_issue_summary",
+        "sku_match",
+        "suggested_reply",
+        "troubleshooting_steps",
+        "follow_up_questions",
+        "official_evidence",
+        "history_reference",
+        "ticket_draft",
     ]
 
     for section in required_sections:
         assert section in SUPPORT_COPILOT_INSTRUCTIONS
 
     assert "不能编造文档、案例、链接、批次、负责人、政策或技术结论" in SUPPORT_COPILOT_INSTRUCTIONS
-    assert "不要增加无关字段" in SUPPORT_COPILOT_INSTRUCTIONS
+    assert "输出必须符合 SupportAnswer 结构化 schema" in SUPPORT_COPILOT_INSTRUCTIONS
     assert "SKU 精确命中只能说明产品识别可靠" in SUPPORT_COPILOT_INSTRUCTIONS
     assert "整体置信度必须为低" in SUPPORT_COPILOT_INSTRUCTIONS
 
 
-def test_agent_exposes_only_agent_sdk_tools():
+def test_agent_uses_structured_output_without_retrieval_tools():
     agent = build_support_copilot("test-model")
     tool_names = [tool.name for tool in agent.tools]
 
-    assert tool_names == [
-        "search_sku_catalog",
-        "hybrid_search_kb",
-        "search_issue_history",
-        "create_ticket_draft",
-    ]
+    assert tool_names == []
+    assert agent.output_type is not None
+    assert len(agent.output_guardrails) == 1
 
 
 def test_terminal_model_presets_expose_flash_and_pro():

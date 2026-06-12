@@ -4,10 +4,13 @@ import asyncio
 import hashlib
 import logging
 
-from agents import Runner, SQLiteSession, flush_traces
+from agents import Runner, SQLiteSession, custom_span, flush_traces
+from agents.exceptions import OutputGuardrailTripwireTriggered
 from agents.memory import SessionSettings
 
-from agent_runtime.copilot.answer_contract import validate_answer_contract
+from agent_runtime.copilot.answer_contract import render_support_answer, validate_answer_contract
+from agent_runtime.copilot.evidence import evidence_pack_trace_attributes, short_hash
+from agent_runtime.copilot.evidence_collection import collect_support_evidence
 from agent_runtime.copilot.prompts import build_agent_input
 from agent_runtime.copilot.support_copilot import build_support_copilot
 from agent_runtime.feishu.admission import BotIdentity, should_accept
@@ -25,6 +28,7 @@ from agent_runtime.feishu.runtime_store import RuntimeStore
 from agent_runtime.llm import build_run_config, configure_agents_runtime
 from agent_runtime.settings import Settings, get_settings
 from agent_runtime.tools.history_rag import history_rag_index_available
+from agent_runtime.tools.media_rag import media_rag_index_available
 
 
 logger = logging.getLogger(__name__)
@@ -76,24 +80,51 @@ async def run_support_agent_for_event(event: FeishuMessageEvent, settings: Setti
     )
     user_input = build_feishu_user_input(event, settings)
     thread_id = effective_thread_id(event)
-    result = await Runner.run(
-        agent,
-        build_agent_input(user_input, source="飞书客服话题群"),
-        session=session,
-        run_config=build_run_config(
-            settings,
-            group_id=f"feishu:{event.chat_id}:thread:{thread_id}",
-            metadata={
-                "source": "feishu-bot",
-                "chat_id_hash": hashlib.sha1(event.chat_id.encode("utf-8")).hexdigest()[:12],
-                "thread_id_hash": hashlib.sha1(thread_id.encode("utf-8")).hexdigest()[:12],
-                "message_id_hash": hashlib.sha1(event.message_id.encode("utf-8")).hexdigest()[:12],
+    with custom_span(
+        "support_turn",
+        {
+            "entrypoint": "feishu",
+            "loop_version": "v2",
+            "raw_issue_hash": short_hash(user_input),
+            "chat_id_hash": hashlib.sha1(event.chat_id.encode("utf-8")).hexdigest()[:12],
+            "thread_id_hash": hashlib.sha1(thread_id.encode("utf-8")).hexdigest()[:12],
+            "message_id_hash": hashlib.sha1(event.message_id.encode("utf-8")).hexdigest()[:12],
+        },
+    ):
+        evidence_pack = await collect_support_evidence(user_input, settings)
+        try:
+            result = await Runner.run(
+                agent,
+                build_agent_input(user_input, source="飞书客服话题群", evidence_pack=evidence_pack),
+                context=evidence_pack,
+                session=session,
+                run_config=build_run_config(
+                    settings,
+                    group_id=f"feishu:{event.chat_id}:thread:{thread_id}",
+                    metadata={
+                        "source": "feishu-bot",
+                        "entrypoint": "feishu",
+                        "loop_version": "v2",
+                        "chat_id_hash": hashlib.sha1(event.chat_id.encode("utf-8")).hexdigest()[:12],
+                        "thread_id_hash": hashlib.sha1(thread_id.encode("utf-8")).hexdigest()[:12],
+                        "message_id_hash": hashlib.sha1(event.message_id.encode("utf-8")).hexdigest()[:12],
+                        "history_index_available": history_rag_index_available(settings),
+                        "media_index_available": media_rag_index_available(settings),
+                    },
+                ),
+            )
+        finally:
+            flush_traces()
+        output = render_support_answer(result.final_output)
+        with custom_span(
+            "answer_contract_check",
+            {
+                **evidence_pack_trace_attributes(evidence_pack),
+                "entrypoint": "feishu",
             },
-        ),
-    )
-    flush_traces()
-    output = result.final_output.strip()
-    issues = validate_answer_contract(output, history_connected=history_rag_index_available(settings))
+        ):
+            issues = validate_answer_contract(output, history_connected=history_rag_index_available(settings))
+        flush_traces()
     if issues:
         output += "\n\n内部校验提醒：\n" + "\n".join(f"- {issue.code}: {issue.message}" for issue in issues)
     return output
@@ -145,6 +176,9 @@ async def _process_message_event_unlocked(
 ) -> str:
     try:
         answer = await run_support_agent_for_event(event, settings)
+    except OutputGuardrailTripwireTriggered as exc:
+        runtime_store.record_event_error("agent_guardrail", event, str(exc))
+        answer = "AI 客服参考生成失败，请人工处理。\n错误：输出安全校验未通过。"
     except Exception as exc:
         runtime_store.record_event_error("agent", event, str(exc))
         answer = "AI 客服参考生成失败，请人工处理。\n错误：" + str(exc)

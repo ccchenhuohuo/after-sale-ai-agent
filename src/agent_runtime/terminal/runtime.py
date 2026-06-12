@@ -1,11 +1,15 @@
-from agents import Agent, Runner, SQLiteSession, flush_traces
+from agents import Agent, Runner, SQLiteSession, custom_span, flush_traces
+from agents.exceptions import OutputGuardrailTripwireTriggered
 
-from agent_runtime.copilot.answer_contract import validate_answer_contract
+from agent_runtime.copilot.answer_contract import render_support_answer, validate_answer_contract
+from agent_runtime.copilot.evidence import evidence_pack_trace_attributes, short_hash
+from agent_runtime.copilot.evidence_collection import collect_support_evidence
 from agent_runtime.copilot.prompts import build_agent_input
 from agent_runtime.llm import build_run_config
 from agent_runtime.terminal.session import session_items_to_text
 from agent_runtime.terminal.ui import active_model_label, cyan, dim, green, yellow
 from agent_runtime.tools.history_rag import history_rag_index_available
+from agent_runtime.tools.media_rag import media_rag_index_available
 
 
 def build_compactor(model_name: str) -> Agent:
@@ -59,25 +63,55 @@ async def compact_context(settings, session: SQLiteSession) -> None:
 
 async def run_turn(agent, settings, session: SQLiteSession, user_input: str) -> None:
     print(dim("\nAgent 正在分析..."))
-    result = await Runner.run(
-        agent,
-        build_agent_input(user_input, source="本地终端"),
-        session=session,
-        run_config=build_run_config(
-            settings,
-            group_id="terminal-chat",
-            metadata={
-                "source": "terminal-chat",
-                "model_label": active_model_label(settings),
+    try:
+        with custom_span(
+            "support_turn",
+            {
+                "entrypoint": "terminal",
+                "loop_version": "v2",
+                "raw_issue_hash": short_hash(user_input),
             },
-        ),
-    )
+        ):
+            evidence_pack = await collect_support_evidence(user_input, settings)
+            result = await Runner.run(
+                agent,
+                build_agent_input(user_input, source="本地终端", evidence_pack=evidence_pack),
+                context=evidence_pack,
+                session=session,
+                run_config=build_run_config(
+                    settings,
+                    group_id="terminal-chat",
+                    metadata={
+                        "source": "terminal-chat",
+                        "entrypoint": "terminal",
+                        "loop_version": "v2",
+                        "model_label": active_model_label(settings),
+                        "history_index_available": history_rag_index_available(settings),
+                        "media_index_available": media_rag_index_available(settings),
+                    },
+                ),
+            )
+            final_output = render_support_answer(result.final_output)
+            with custom_span(
+                "answer_contract_check",
+                {
+                    **evidence_pack_trace_attributes(evidence_pack),
+                    "entrypoint": "terminal",
+                },
+            ):
+                contract_issues = validate_answer_contract(
+                    final_output,
+                    history_connected=history_rag_index_available(settings),
+                )
+    except OutputGuardrailTripwireTriggered as exc:
+        flush_traces()
+        print("\n" + yellow("输出安全校验未通过，已阻断本轮答案。"))
+        for message in _guardrail_messages(exc):
+            print(f"- {message}")
+        print("")
+        return
+
     flush_traces()
-    final_output = result.final_output.strip()
-    contract_issues = validate_answer_contract(
-        final_output,
-        history_connected=history_rag_index_available(settings),
-    )
     print("\n" + cyan("─" * 78))
     print(final_output)
     if contract_issues:
@@ -85,3 +119,17 @@ async def run_turn(agent, settings, session: SQLiteSession, user_input: str) -> 
         for issue in contract_issues:
             print(f"- {issue.code}: {issue.message}")
     print(cyan("─" * 78) + "\n")
+
+
+def _guardrail_messages(exc: OutputGuardrailTripwireTriggered) -> list[str]:
+    guardrail_result = getattr(exc, "guardrail_result", None)
+    output = getattr(guardrail_result, "output", None)
+    output_info = getattr(output, "output_info", None)
+    if isinstance(output_info, list):
+        messages = []
+        for item in output_info:
+            if isinstance(item, dict) and item.get("message"):
+                messages.append(str(item["message"]))
+        if messages:
+            return messages
+    return ["输出不符合售后安全边界，请人工处理。"]

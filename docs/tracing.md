@@ -48,6 +48,22 @@ PHOENIX_PROJECT_NAME=agent-runtime-test
 - `/model` 会在 Flash 和 Pro 预设之间切换，影响后续 Agent 轮次。
 - 每次终端 Agents SDK 运行后都会调用 `flush_traces()`。
 
+## v2 Loop 业务 Span
+
+当前运行时会先收集结构化证据，再运行结构化输出 Agent。Phoenix / OpenAI traces 中应能看到以下业务 span：
+
+- `support_turn`：单轮售后分析入口，包含 `entrypoint`、`loop_version=v2`、用户问题哈希和飞书线程哈希。
+- `input_normalize`：输入归一化和 SKU token 计数，只记录哈希、长度和计数。
+- `sku_resolve`：SKU 目录解析。
+- `evidence_collect`：并发证据收集的父 span。
+- `official_kb_search`：正式知识库检索；当前正式 KB 未接入时返回空证据。
+- `history_search`：历史话题 RAG 检索。
+- `media_search`：媒体观察证据检索。
+- `evidence_pack`：证据包汇总，记录 SKU/正式依据/历史/媒体命中数和证据等级状态。
+- `answer_contract_check`：最终中文答案 contract 校验。
+
+trace metadata 会包含 `entrypoint`、`loop_version`、`source`、`model_label`、`history_index_available`、`media_index_available` 等非敏感字段。默认不记录用户原文、工具原文或飞书消息内容。
+
 ## 查看方式
 
 1. 在广州服务器启动 Phoenix 服务。

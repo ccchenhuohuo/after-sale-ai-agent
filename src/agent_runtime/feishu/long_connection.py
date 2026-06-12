@@ -4,21 +4,62 @@ import asyncio
 import hashlib
 import logging
 import signal
+from dataclasses import dataclass
 from typing import Any
 
 from agents import custom_span
 
-from agent_runtime.feishu.admission import BotIdentity
+from agent_runtime.feishu.admission import BotIdentity, should_accept, split_csv
 from agent_runtime.feishu.bridge import event_from_payload, process_message_event
 from agent_runtime.feishu.event_sources import (
     LarkOapiEventSource,
     fetch_bot_open_id,
     fetch_recent_chat_messages,
 )
+from agent_runtime.feishu.events import FeishuMessageEvent, effective_thread_id
 from agent_runtime.settings import Settings, get_settings
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PayloadAdmission:
+    accepted: bool
+    status: str
+    event: FeishuMessageEvent | None = None
+
+
+@dataclass
+class BackfillStats:
+    fetched_count: int = 0
+    scheduled_count: int = 0
+    skipped_app_or_bot: int = 0
+    skipped_non_text: int = 0
+    skipped_no_trigger: int = 0
+    skipped_expired: int = 0
+
+    def record(self, status: str) -> None:
+        if status == "accepted":
+            self.scheduled_count += 1
+        elif status == "skipped_app_or_bot":
+            self.skipped_app_or_bot += 1
+        elif status == "skipped_non_text":
+            self.skipped_non_text += 1
+        elif status == "skipped_expired":
+            self.skipped_expired += 1
+        else:
+            self.skipped_no_trigger += 1
+
+    def trace_attributes(self) -> dict[str, int]:
+        return {
+            "fetched_count": self.fetched_count,
+            "scheduled_count": self.scheduled_count,
+            "skipped_app_or_bot": self.skipped_app_or_bot,
+            "skipped_non_text": self.skipped_non_text,
+            "skipped_no_trigger": self.skipped_no_trigger,
+            "skipped_expired": self.skipped_expired,
+        }
 
 
 async def handle_payload(
@@ -71,6 +112,38 @@ def _track_processing_task(
     task.add_done_callback(tasks.discard)
 
 
+async def _schedule_websocket_payload(
+    tasks: set[asyncio.Task[None]],
+    payload: dict[str, Any],
+    settings: Settings,
+    semaphore: asyncio.Semaphore,
+    bot_identity: BotIdentity,
+) -> str:
+    admission = _websocket_payload_admission(payload, bot_identity)
+    if not admission.accepted:
+        event = admission.event
+        logger.info(
+            "Skipped Feishu SDK event before queue: status=%s message_id_hash=%s chat_id_hash=%s thread_id_hash=%s sender_type=%s",
+            admission.status,
+            _short_hash(event.message_id if event else ""),
+            _short_hash(event.chat_id if event else ""),
+            _short_hash(effective_thread_id(event) if event else ""),
+            event.sender_type if event else "",
+        )
+        return admission.status
+    _track_processing_task(tasks, payload, settings, semaphore, bot_identity)
+    return "scheduled"
+
+
+def _websocket_payload_admission(payload: dict[str, Any], bot_identity: BotIdentity) -> PayloadAdmission:
+    event = event_from_payload(payload)
+    if event is None or not event.message_id or not event.chat_id:
+        return PayloadAdmission(False, "ignored", event)
+    if _is_self_echo_or_bot_sender(event, bot_identity):
+        return PayloadAdmission(False, "skipped_app_or_bot", event)
+    return PayloadAdmission(True, "accepted", event)
+
+
 async def _backfill_loop(
     tasks: set[asyncio.Task[None]],
     settings: Settings,
@@ -103,11 +176,62 @@ async def _backfill_once(
         },
     ):
         payloads = await fetch_recent_chat_messages(settings)
+    stats = BackfillStats(fetched_count=len(payloads))
     for payload in payloads:
+        admission = _backfill_payload_admission(payload, settings, bot_identity)
+        stats.record(admission.status)
+        if not admission.accepted:
+            continue
         _track_processing_task(tasks, payload, settings, semaphore, bot_identity)
+    with custom_span("backfill_filter", stats.trace_attributes()):
+        pass
     if payloads:
-        logger.info("Feishu message backfill scheduled %s recent payload(s).", len(payloads))
-    return len(payloads)
+        logger.info(
+            "Feishu message backfill fetched=%s scheduled=%s skipped_app_or_bot=%s skipped_non_text=%s skipped_no_trigger=%s skipped_expired=%s.",
+            stats.fetched_count,
+            stats.scheduled_count,
+            stats.skipped_app_or_bot,
+            stats.skipped_non_text,
+            stats.skipped_no_trigger,
+            stats.skipped_expired,
+        )
+    return stats.scheduled_count
+
+
+def _backfill_payload_admission(
+    payload: dict[str, Any],
+    settings: Settings,
+    bot_identity: BotIdentity,
+) -> PayloadAdmission:
+    event = event_from_payload(payload)
+    if event is None or not event.message_id or not event.chat_id:
+        return PayloadAdmission(False, "skipped_no_trigger", event)
+    if event.sender_type != "user" or _is_self_echo_or_bot_sender(event, bot_identity):
+        return PayloadAdmission(False, "skipped_app_or_bot", event)
+    if event.message_type != "text":
+        return PayloadAdmission(False, "skipped_non_text", event)
+    allowed_chat_ids = split_csv(settings.feishu_support_group_chat_id)
+    if allowed_chat_ids and event.chat_id not in allowed_chat_ids:
+        return PayloadAdmission(False, "skipped_no_trigger", event)
+
+    gate = should_accept(event, settings, bot_identity)
+    if gate.accepted:
+        return PayloadAdmission(True, "accepted", event)
+    if gate.status == "expired":
+        return PayloadAdmission(False, "skipped_expired", event)
+    if gate.status in {"ignored_bot_sender", "suppressed_bot_loop"}:
+        return PayloadAdmission(False, "skipped_app_or_bot", event)
+    return PayloadAdmission(False, "skipped_no_trigger", event)
+
+
+def _is_self_echo_or_bot_sender(event: FeishuMessageEvent, bot_identity: BotIdentity) -> bool:
+    if event.sender_type in {"app", "bot"}:
+        return True
+    if bot_identity.app_id and event.sender_id == bot_identity.app_id:
+        return True
+    if bot_identity.open_id and event.sender_id == bot_identity.open_id:
+        return True
+    return False
 
 
 async def consume_long_connection(settings: Settings | None = None) -> int:
@@ -137,7 +261,7 @@ async def consume_long_connection(settings: Settings | None = None) -> int:
             backfill_task = asyncio.create_task(_backfill_loop(tasks, settings, semaphore, bot_identity))
 
         async def schedule_payload(payload: dict[str, Any]) -> None:
-            _track_processing_task(tasks, payload, settings, semaphore, bot_identity)
+            await _schedule_websocket_payload(tasks, payload, settings, semaphore, bot_identity)
 
         return await event_source.run(schedule_payload)
     finally:
@@ -178,8 +302,14 @@ async def _amain() -> int:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    configure_runtime_logging()
     raise SystemExit(asyncio.run(_amain()))
+
+
+def configure_runtime_logging() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,10 @@ from agent_runtime.settings import Settings
 PayloadHandler = Callable[[dict[str, Any]], Awaitable[None]]
 
 EVENT_KEY = "im.message.receive_v1"
+NOOP_EVENT_TYPES = {
+    "im.message.reaction.created_v1",
+    "im.message.reaction.deleted_v1",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -95,10 +99,13 @@ class LarkOapiEventSource(FeishuEventSource):
 
             def on_ignored_event(data: Any) -> None:
                 payload = payload_from_lark_oapi_event(data)
+                event_type = _payload_event_type(payload)
+                event_id = _payload_event_id(payload)
                 logger.info(
-                    "Ignored Feishu SDK event type: event_type=%s event_id_hash=%s.",
-                    _payload_event_type(payload),
-                    _short_hash(_payload_event_id(payload)),
+                    "Ignored Feishu SDK event type: status=%s event_type=%s event_id_hash=%s.",
+                    "noop_reaction_event" if is_noop_event_type(event_type) else "ignored_sdk_event",
+                    event_type,
+                    _short_hash(event_id),
                 )
 
             event_handler_builder = lark.EventDispatcherHandler.builder("", "").register_p2_im_message_receive_v1(
@@ -177,6 +184,10 @@ def _payload_event_type(payload: dict[str, Any]) -> str:
 def _payload_event_id(payload: dict[str, Any]) -> str:
     header = payload.get("header") if isinstance(payload.get("header"), dict) else {}
     return str(header.get("event_id") or payload.get("event_id") or "")
+
+
+def is_noop_event_type(event_type: str) -> bool:
+    return event_type in NOOP_EVENT_TYPES
 
 
 def _short_hash(value: str) -> str:

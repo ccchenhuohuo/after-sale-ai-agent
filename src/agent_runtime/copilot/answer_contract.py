@@ -24,6 +24,8 @@ ANSWER_FIELDS = [
     "工单草稿",
 ]
 
+FEISHU_VISIBLE_REPLY_FALLBACK = "这轮没有生成到足够稳妥的建议，请人工接手确认后再回复客户。"
+
 FORBIDDEN_COMMITMENT_PATTERNS = [
     "可以退款",
     "直接退款",
@@ -47,6 +49,38 @@ FORBIDDEN_COMMITMENT_REGEX_PATTERNS = [
 ]
 
 NEGATED_COMMITMENT_PREFIXES = ["不要", "不能", "不可", "不得", "不建议", "未获得正式政策依据前，不要"]
+
+FEISHU_VISIBLE_INTERNAL_PATTERNS = [
+    re.compile(rf"{re.escape(field)}[：:]", re.IGNORECASE) for field in ANSWER_FIELDS
+] + [
+    re.compile(r"\bSupportAnswer\b", re.IGNORECASE),
+    re.compile(r"\bAgent SDK\b", re.IGNORECASE),
+    re.compile(r"\bSDK\b", re.IGNORECASE),
+    re.compile(r"\bloop\b", re.IGNORECASE),
+    re.compile(r"\boutput guardrail\b", re.IGNORECASE),
+    re.compile(r"\bguardrail\b", re.IGNORECASE),
+    re.compile(r"\bcontract\b", re.IGNORECASE),
+    re.compile(r"\btrace\b", re.IGNORECASE),
+    re.compile(r"\btool\b", re.IGNORECASE),
+    re.compile(r"\bRunner\.run\b", re.IGNORECASE),
+    re.compile(r"\bPydantic\b", re.IGNORECASE),
+    re.compile(r"OpenAI Agents", re.IGNORECASE),
+    re.compile(r"证据包"),
+    re.compile(r"工具调用"),
+    re.compile(r"未查询到可信正式依据"),
+    re.compile(r"未查询到可信历史参考"),
+    re.compile(r"未审核历史参考"),
+    re.compile(r"未审核媒体观察证据"),
+]
+
+FEISHU_VISIBLE_MARKDOWN_PATTERNS = [
+    re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE),
+    re.compile(r"^\s{0,3}(?:[-*+]\s+|\d+[.)]\s+)", re.MULTILINE),
+    re.compile(r"^\s{0,3}\|.*\|\s*$", re.MULTILINE),
+    re.compile(r"```"),
+    re.compile(r"`[^`]+`"),
+    re.compile(r"\*\*[^*]+\*\*"),
+]
 
 
 @dataclass(frozen=True)
@@ -143,12 +177,7 @@ def validate_answer_contract(
             break
         previous_position = position
 
-    for pattern in FORBIDDEN_COMMITMENT_PATTERNS:
-        if _contains_forbidden_commitment(text, pattern):
-            issues.append(ContractIssue("forbidden_commitment", f"可能包含售后承诺：{pattern}"))
-    for pattern in FORBIDDEN_COMMITMENT_REGEX_PATTERNS:
-        if _contains_forbidden_commitment_regex(text, pattern):
-            issues.append(ContractIssue("forbidden_commitment", f"可能包含售后承诺：{pattern.pattern}"))
+    issues.extend(_forbidden_commitment_issues(text))
 
     official_section = _section_text(text, "正式依据")
     if not official_kb_connected and official_section and "未查询到可信正式依据" not in official_section:
@@ -169,6 +198,35 @@ def validate_answer_contract(
                 )
             )
 
+    return issues
+
+
+def render_feishu_reply(answer: SupportAnswer | dict) -> str:
+    answer = _coerce_support_answer(answer)
+    paragraphs = [
+        _intro_paragraph(answer),
+        f"可以先这样和客户沟通：{_visible_text(answer.suggested_reply)}",
+    ]
+    action_paragraph = _action_paragraph(answer)
+    if action_paragraph:
+        paragraphs.append(action_paragraph)
+    paragraphs.append(
+        "涉及退款、赔付、换新、补发这类售后动作，或者涉及处理时间的内容，先不要直接承诺；需要等正式政策或人工复核后再给客户明确口径。"
+    )
+    return "\n\n".join(paragraph for paragraph in paragraphs if paragraph)
+
+
+def validate_feishu_visible_reply(text: str) -> list[ContractIssue]:
+    issues: list[ContractIssue] = []
+    for pattern in FEISHU_VISIBLE_INTERNAL_PATTERNS:
+        if pattern.search(text):
+            issues.append(ContractIssue("visible_internal_leak", f"飞书可见回复包含内部信息：{pattern.pattern}"))
+            break
+    for pattern in FEISHU_VISIBLE_MARKDOWN_PATTERNS:
+        if pattern.search(text):
+            issues.append(ContractIssue("visible_markdown", f"飞书可见回复包含 Markdown 痕迹：{pattern.pattern}"))
+            break
+    issues.extend(_forbidden_commitment_issues(text))
     return issues
 
 
@@ -265,3 +323,99 @@ def _has_history_or_media_evidence(evidence_pack: SupportEvidencePack | None) ->
     if evidence_pack is None:
         return False
     return evidence_pack.history_hit_count > 0 or evidence_pack.media_hit_count > 0
+
+
+def _forbidden_commitment_issues(text: str) -> list[ContractIssue]:
+    issues: list[ContractIssue] = []
+    for pattern in FORBIDDEN_COMMITMENT_PATTERNS:
+        if _contains_forbidden_commitment(text, pattern):
+            issues.append(ContractIssue("forbidden_commitment", f"可能包含售后承诺：{pattern}"))
+    for pattern in FORBIDDEN_COMMITMENT_REGEX_PATTERNS:
+        if _contains_forbidden_commitment_regex(text, pattern):
+            issues.append(ContractIssue("forbidden_commitment", f"可能包含售后承诺：{pattern.pattern}"))
+    return issues
+
+
+def _coerce_support_answer(answer: SupportAnswer | dict) -> SupportAnswer:
+    if isinstance(answer, SupportAnswer):
+        return answer
+    return SupportAnswer.model_validate(answer)
+
+
+def _intro_paragraph(answer: SupportAnswer) -> str:
+    summary = _visible_text(answer.user_issue_summary).rstrip("。！？") or "客户反馈的问题还需要进一步确认"
+    direction = (
+        "目前材料还不够直接下结论，建议先按信息收集和人工确认推进。"
+        if _needs_cautious_visible_reply(answer)
+        else "现有信息可以先支持客服做初步沟通，但最终处理口径仍建议人工确认。"
+    )
+    return f"我先看了一下，{summary}。{direction}"
+
+
+def _action_paragraph(answer: SupportAnswer) -> str:
+    parts = []
+    steps = _visible_items(answer.troubleshooting_steps, limit=3)
+    questions = _visible_follow_up_items(answer.follow_up_questions, limit=3)
+    if steps:
+        parts.append("处理前建议先" + "；".join(steps))
+    if questions:
+        parts.append("还需要向客户确认" + _join_follow_up_items(questions))
+    if not parts:
+        return ""
+    return "；".join(parts) + "。"
+
+
+def _needs_cautious_visible_reply(answer: SupportAnswer) -> bool:
+    combined = f"{answer.confidence} {answer.confidence_reason} {answer.official_evidence} {answer.history_reference}"
+    return (
+        answer.confidence == "低"
+        or "未查询到可信正式依据" in combined
+        or "未查询到可信历史参考" in combined
+        or "未审核历史参考" in combined
+        or "未审核媒体观察证据" in combined
+        or "需人工确认" in combined
+    )
+
+
+def _visible_items(items: list[str], limit: int = 3) -> list[str]:
+    return [item for item in (_visible_text(item).rstrip("。！？") for item in items[:limit]) if item]
+
+
+def _visible_follow_up_items(items: list[str], limit: int = 3) -> list[str]:
+    clean_items = []
+    for item in _visible_items(items, limit=limit):
+        clean = re.sub(r"^(?:请客户|请)?(?:补充|提供|确认|说明)", "", item).strip(" ：:，,")
+        clean_items.append(clean or item)
+    return clean_items
+
+
+def _join_follow_up_items(items: list[str]) -> str:
+    text = "；".join(items)
+    return (" " + text) if text and re.match(r"[A-Za-z0-9]", text) else text
+
+
+def _visible_text(value: str) -> str:
+    text = str(value or "").replace("\r", "\n")
+    lines = []
+    for line in text.splitlines():
+        clean = re.sub(r"^\s*(?:[-*+]\s+|\d+[.)]\s*)", "", line).strip()
+        if clean:
+            lines.append(clean)
+    text = "；".join(lines)
+    text = re.sub(r"[`*_#|]+", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    replacements = {
+        "未查询到可信正式依据": "目前还没有足够材料直接下结论",
+        "未查询到可信历史参考": "目前没有可直接复用的历史处理口径",
+        "未审核历史参考": "相似历史信息",
+        "未审核媒体观察证据": "相似媒体线索",
+        "Agent SDK": "",
+        "SupportAnswer": "",
+        "证据包": "参考信息",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    clean_text = text.strip(" ；。")
+    if not clean_text:
+        return ""
+    return clean_text + ("。" if clean_text[-1] not in "。！？" else "")

@@ -61,8 +61,9 @@ PHOENIX_PROJECT_NAME=agent-runtime-test
 - `media_search`：媒体观察证据检索。
 - `evidence_pack`：证据包汇总，记录 SKU/正式依据/历史/媒体命中数和证据等级状态。
 - `answer_contract_check`：最终中文答案 contract 校验。
+- `feishu_visible_reply_check`：飞书可见回复校验，检查内部字段、Markdown 痕迹和售后承诺风险。
 
-trace metadata 会包含 `entrypoint`、`loop_version`、`source`、`model_label`、`history_index_available`、`media_index_available` 等非敏感字段。默认不记录用户原文、工具原文或飞书消息内容。
+trace metadata 会包含 `entrypoint`、`loop_version`、`source`、`model_label`、`history_index_available`、`media_index_available` 等非敏感字段。默认不记录用户原文、工具原文或飞书消息内容。内部 evidence、contract 和 trace 信息只进入 runtime/tracing，不直接拼进飞书群回复。
 
 ## Feishu 端到端 Span
 

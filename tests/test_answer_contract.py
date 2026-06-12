@@ -1,8 +1,10 @@
 from agent_runtime.copilot.answer_contract import (
     SupportAnswer,
     contract_issues_for_output,
+    render_feishu_reply,
     render_support_answer,
     validate_answer_contract,
+    validate_feishu_visible_reply,
 )
 from agent_runtime.copilot.evidence import HistoryEvidence, SupportEvidencePack
 
@@ -169,6 +171,55 @@ def test_support_answer_renders_existing_customer_service_format():
     assert "建议排查步骤：" in rendered
     assert "1. 确认型号" in rendered
     assert validate_answer_contract(rendered) == []
+
+
+def test_feishu_visible_reply_renders_natural_text_without_internal_format():
+    answer = SupportAnswer(
+        issue_type="troubleshooting",
+        run_mode="Agent SDK",
+        confidence="低",
+        confidence_reason="未查询到可信正式依据。",
+        user_issue_summary="客户反馈设备异常。",
+        sku_match="未在 SKU 目录中命中；需要补充订单 SKU、包装 SKU、产品铭牌或图片。",
+        suggested_reply="建议先安抚客户，并说明需要补充信息后再确认处理方式。",
+        troubleshooting_steps=["1. 确认型号", "- 收集截图", "记录复现步骤"],
+        follow_up_questions=["请补充 SKU", "请提供异常照片"],
+        official_evidence="未查询到可信正式依据，不可编造。",
+        history_reference="未查询到可信历史参考，不可编造。",
+        ticket_draft="不建议生成工单，并说明原因。",
+    )
+
+    rendered = render_feishu_reply(answer)
+
+    blocked_terms = [
+        "AI 客服参考",
+        "问题类型：",
+        "运行模式：",
+        "正式依据：",
+        "历史参考：",
+        "工单草稿：",
+        "Agent SDK",
+        "SupportAnswer",
+        "证据包",
+        "未查询到可信正式依据",
+        "未查询到可信历史参考",
+    ]
+    assert not any(term in rendered for term in blocked_terms)
+    assert not any(line.lstrip().startswith(("-", "#", "1.")) for line in rendered.splitlines())
+    assert "可以先这样和客户沟通" in rendered
+    assert "目前材料还不够直接下结论" in rendered
+    assert validate_feishu_visible_reply(rendered) == []
+
+
+def test_feishu_visible_reply_validation_blocks_internal_markdown_and_commitments():
+    internal = "### AI 客服参考\n- 正式依据：未查询到可信正式依据\n可以退款。"
+
+    issues = validate_feishu_visible_reply(internal)
+
+    assert any(issue.code == "visible_internal_leak" for issue in issues)
+    assert any(issue.code == "visible_markdown" for issue in issues)
+    assert any(issue.code == "forbidden_commitment" for issue in issues)
+    assert validate_feishu_visible_reply("目前信息不足，不要承诺退款、换新或补发。") == []
 
 
 def test_support_answer_contract_issues_for_forbidden_commitment():

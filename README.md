@@ -18,7 +18,7 @@ flowchart TB
     evidence --> official["正式知识库<br/>尚未接入"]
     evidence --> history["历史话题 RAG<br/>未审核历史参考"]
     evidence --> media["媒体观察证据<br/>未审核媒体参考"]
-    agent --> answer["Pydantic 结构化客服参考答案<br/>output guardrail + 中文渲染"]
+    agent --> answer["Pydantic 结构化客服参考答案<br/>output guardrail + 双层渲染"]
 ```
 
 运行规则：
@@ -35,7 +35,7 @@ flowchart TB
 - 正式知识库工具当前返回明确的“未查询到可信正式依据”。
 - `search_issue_history` 已接入飞书 raw JSON 历史话题 RAG，但只作为未审核历史参考，不能作为正式依据、政策依据或客户承诺依据。
 - 当前 v2 loop 由 runtime 先调用 `collect_support_evidence()` 并发收集 SKU、正式依据、历史参考和媒体观察证据，再把结构化证据包交给 Agent 生成 `SupportAnswer`。
-- Agent 最终输出经过 SDK output guardrail 和本地答案 contract 校验；终端和飞书仍渲染为原有中文 11 字段格式。
+- Agent 最终输出经过 SDK output guardrail 和本地答案 contract 校验；终端保留中文 11 字段调试格式，飞书群可见回复会再渲染成面向客服同事的自然中文。
 - 答案不得编造正式文档、历史案例、链接、负责人、政策或技术结论。
 
 ## 运行方式
@@ -103,7 +103,7 @@ FEISHU_EVENT_CONCURRENCY=5
 
 ## 答案格式
 
-Agent 必须按以下顺序输出字段：
+Agent 内部结构化输出和终端调试输出必须按以下顺序保留字段：
 
 1. `问题类型`
 2. `运行模式`
@@ -118,6 +118,8 @@ Agent 必须按以下顺序输出字段：
 11. `工单草稿`
 
 如果某个字段不能由已接入工具或高置信度推理支持，必须明确说明不能确认，不能填充虚假内容。
+
+飞书群可见回复不直接暴露这些字段名、`Agent SDK`、证据包、trace/tool/guardrail 等内部信息，也不使用 Markdown 标题、列表、表格或代码块。飞书回复会把结构化结果改写成 2-4 段自然中文，面向客服同事说明判断、可沟通口径、需要补充的信息和安全边界。
 
 ## 上下文
 

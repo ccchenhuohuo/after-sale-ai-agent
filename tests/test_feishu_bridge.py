@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 import agent_runtime.feishu.bridge as bridge
-from agent_runtime.copilot.answer_contract import SupportAnswer
+from agent_runtime.copilot.answer_contract import FEISHU_VISIBLE_REPLY_FALLBACK, SupportAnswer
 from agent_runtime.feishu.admission import BotIdentity, should_accept
 from agent_runtime.feishu.bridge import (
     FeishuMessageEvent,
@@ -505,29 +505,20 @@ def test_sdk_responder_failure_raises_without_top_level_create(tmp_path):
     assert message_api.create_called is False
 
 
-def test_truncate_for_feishu_preserves_safety_sections():
+def test_truncate_for_feishu_uses_plain_visible_truncation():
     answer = "\n".join(
         [
-            "AI 客服参考",
-            "建议回复（供客服参考，可复制调整）：",
+            "我先看了一下，客户反馈设备异常，目前材料还不够直接下结论。",
             "很长的正文" * 80,
-            "正式依据：",
-            "未查询到可信正式依据，不可编造。",
-            "历史参考：",
-            "命中未审核历史参考，需人工确认，不能作为正式依据。",
-            "工单草稿：",
-            "不建议生成工单，并说明原因。",
         ]
     )
 
-    truncated = truncate_for_feishu(answer, 260)
+    truncated = truncate_for_feishu(answer, 120)
 
-    assert len(truncated) <= 260
-    assert "正式依据" in truncated
-    assert "历史参考" in truncated
-    assert "工单草稿" in truncated
-    assert "未查询到可信正式依据" in truncated
-    assert "需人工确认" in truncated
+    assert len(truncated) <= 120
+    assert "[安全边界摘要]" not in truncated
+    assert "正式依据" not in truncated
+    assert truncated.endswith("...[内容过长已截断]")
 
 
 def test_effective_thread_id_prefers_thread_then_root_then_message():
@@ -898,6 +889,155 @@ def test_feishu_agent_session_uses_persistent_db(monkeypatch, tmp_path):
 
     assert observed_lengths == [0, 1]
     assert (tmp_path / "agent_sessions.sqlite3").exists()
+
+
+def test_feishu_agent_returns_visible_natural_reply(monkeypatch, tmp_path):
+    settings = settings_for_tmp(tmp_path, llm_api_key="test-key")
+
+    monkeypatch.setattr(bridge, "configure_agents_runtime", lambda settings: settings)
+    monkeypatch.setattr(bridge, "build_support_copilot", lambda model: object())
+
+    async def fake_collect(raw_issue, settings):
+        from agent_runtime.copilot.evidence import SupportEvidencePack
+
+        return SupportEvidencePack(
+            raw_issue_hash="hash",
+            query_chars=len(raw_issue),
+            issue_type="unknown",
+            product_model="",
+            sku=[],
+            official=[],
+            history=[],
+            media=[],
+        )
+
+    async def fake_run(agent, input_text, *, context=None, session=None, run_config=None):
+        return SimpleNamespace(
+            final_output=SupportAnswer(
+                issue_type="unknown",
+                run_mode="Agent SDK",
+                confidence="低",
+                confidence_reason="未查询到可信正式依据。",
+                user_issue_summary="客户反馈设备异常。",
+                sku_match="未在 SKU 目录中命中；需要补充订单 SKU、包装 SKU、产品铭牌或图片。",
+                suggested_reply="建议先安抚客户，并说明需要补充信息后再确认处理方式。",
+                troubleshooting_steps=["确认型号", "收集截图"],
+                follow_up_questions=["请补充 SKU"],
+                official_evidence="未查询到可信正式依据，不可编造。",
+                history_reference="未查询到可信历史参考，不可编造。",
+                ticket_draft="不建议生成工单，并说明原因。",
+            )
+        )
+
+    monkeypatch.setattr(bridge, "collect_support_evidence", fake_collect)
+    monkeypatch.setattr(bridge.Runner, "run", fake_run)
+    event = FeishuMessageEvent(
+        event_id="evt_1",
+        chat_id="oc_target",
+        chat_type="group",
+        message_id="om_1",
+        message_type="text",
+        sender_id="ou_sender",
+        content="@飞书 CLI L023 不亮",
+        mention_names=("飞书 CLI",),
+        thread_id="omt_thread",
+    )
+
+    reply = asyncio.run(bridge.run_support_agent_for_event(event, settings))
+
+    assert "可以先这样和客户沟通" in reply
+    assert "AI 客服参考" not in reply
+    assert "问题类型：" not in reply
+    assert "Agent SDK" not in reply
+    assert "未查询到可信正式依据" not in reply
+
+
+def test_feishu_agent_visible_validation_uses_safe_fallback(monkeypatch, tmp_path):
+    settings = settings_for_tmp(tmp_path, llm_api_key="test-key")
+
+    monkeypatch.setattr(bridge, "configure_agents_runtime", lambda settings: settings)
+    monkeypatch.setattr(bridge, "build_support_copilot", lambda model: object())
+
+    async def fake_collect(raw_issue, settings):
+        from agent_runtime.copilot.evidence import SupportEvidencePack
+
+        return SupportEvidencePack(
+            raw_issue_hash="hash",
+            query_chars=len(raw_issue),
+            issue_type="unknown",
+            product_model="",
+            sku=[],
+            official=[],
+            history=[],
+            media=[],
+        )
+
+    async def fake_run(agent, input_text, *, context=None, session=None, run_config=None):
+        return SimpleNamespace(
+            final_output=SupportAnswer(
+                issue_type="unknown",
+                run_mode="Agent SDK",
+                confidence="低",
+                confidence_reason="未查询到可信正式依据。",
+                user_issue_summary="客户反馈设备异常。",
+                sku_match="未在 SKU 目录中命中；需要补充订单 SKU、包装 SKU、产品铭牌或图片。",
+                suggested_reply="可以退款。",
+                troubleshooting_steps=["确认型号"],
+                follow_up_questions=["请补充 SKU"],
+                official_evidence="未查询到可信正式依据，不可编造。",
+                history_reference="未查询到可信历史参考，不可编造。",
+                ticket_draft="不建议生成工单，并说明原因。",
+            )
+        )
+
+    monkeypatch.setattr(bridge, "collect_support_evidence", fake_collect)
+    monkeypatch.setattr(bridge.Runner, "run", fake_run)
+    event = FeishuMessageEvent(
+        event_id="evt_1",
+        chat_id="oc_target",
+        chat_type="group",
+        message_id="om_1",
+        message_type="text",
+        sender_id="ou_sender",
+        content="@飞书 CLI L023 不亮",
+        mention_names=("飞书 CLI",),
+        thread_id="omt_thread",
+    )
+
+    assert asyncio.run(bridge.run_support_agent_for_event(event, settings)) == FEISHU_VISIBLE_REPLY_FALLBACK
+
+
+def test_feishu_agent_failure_fallback_does_not_expose_internal_error(monkeypatch, tmp_path):
+    clear_runtime_state_for_tests()
+
+    async def failing_agent(event, settings):
+        raise RuntimeError("database password leaked stack trace")
+
+    replies = []
+
+    async def fake_reply(message_id, text, settings=None):
+        replies.append(text)
+        return ReplyResult(status="replied", reply_message_id="om_reply")
+
+    monkeypatch.setattr(bridge, "run_support_agent_for_event", failing_agent)
+    monkeypatch.setattr(bridge, "reply_in_thread", fake_reply)
+    settings = settings_for_tmp(tmp_path)
+    event = FeishuMessageEvent(
+        event_id="evt_1",
+        chat_id="oc_target",
+        chat_type="group",
+        message_id="om_msg",
+        message_type="text",
+        sender_id="ou_sender",
+        content="@飞书 CLI L023 不亮",
+        mention_names=("飞书 CLI",),
+        thread_id="omt_thread",
+    )
+
+    assert asyncio.run(bridge.process_message_event(event, settings)) == "replied"
+    assert replies == [FEISHU_VISIBLE_REPLY_FALLBACK]
+    assert "password" not in replies[0]
+    assert "错误" not in replies[0]
 
 
 def test_feishu_bridge_logs_hash_identifiers(caplog, tmp_path):

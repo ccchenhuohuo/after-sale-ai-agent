@@ -9,7 +9,13 @@ from agents import Runner, SQLiteSession, custom_span, flush_traces, trace
 from agents.exceptions import OutputGuardrailTripwireTriggered
 from agents.memory import SessionSettings
 
-from agent_runtime.copilot.answer_contract import render_support_answer, validate_answer_contract
+from agent_runtime.copilot.answer_contract import (
+    FEISHU_VISIBLE_REPLY_FALLBACK,
+    render_feishu_reply,
+    render_support_answer,
+    validate_answer_contract,
+    validate_feishu_visible_reply,
+)
 from agent_runtime.copilot.evidence import evidence_pack_trace_attributes, short_hash
 from agent_runtime.copilot.evidence_collection import collect_support_evidence
 from agent_runtime.copilot.prompts import build_agent_input
@@ -146,10 +152,27 @@ async def run_support_agent_for_event(event: FeishuMessageEvent, settings: Setti
             },
         ):
             issues = validate_answer_contract(output, history_connected=history_rag_index_available(settings))
+        visible_output = render_feishu_reply(result.final_output)
+        visible_issues = validate_feishu_visible_reply(visible_output)
+        with custom_span(
+            "feishu_visible_reply_check",
+            {
+                "entrypoint": "feishu",
+                "internal_issue_codes": [issue.code for issue in issues],
+                "visible_issue_codes": [issue.code for issue in visible_issues],
+            },
+        ):
+            pass
         flush_traces()
-    if issues:
-        output += "\n\n内部校验提醒：\n" + "\n".join(f"- {issue.code}: {issue.message}" for issue in issues)
-    return output
+    if issues or visible_issues:
+        logger.warning(
+            "Feishu visible reply blocked by validation: internal_issue_codes=%s visible_issue_codes=%s message_id_hash=%s",
+            [issue.code for issue in issues],
+            [issue.code for issue in visible_issues],
+            _hash_id(event.message_id),
+        )
+        return FEISHU_VISIBLE_REPLY_FALLBACK
+    return visible_output
 
 
 async def reply_in_thread(message_id: str, text: str, settings: Settings | None = None) -> ReplyResult:
@@ -239,10 +262,10 @@ async def _process_message_event_unlocked(
             answer = await run_support_agent_for_event(event, settings)
     except OutputGuardrailTripwireTriggered as exc:
         runtime_store.record_event_error("agent_guardrail", event, str(exc))
-        answer = "AI 客服参考生成失败，请人工处理。\n错误：输出安全校验未通过。"
+        answer = FEISHU_VISIBLE_REPLY_FALLBACK
     except Exception as exc:
         runtime_store.record_event_error("agent", event, str(exc))
-        answer = "AI 客服参考生成失败，请人工处理。\n错误：" + str(exc)
+        answer = FEISHU_VISIBLE_REPLY_FALLBACK
     try:
         reply_started_at = time.perf_counter()
         with custom_span("reply_in_thread", trace_data):

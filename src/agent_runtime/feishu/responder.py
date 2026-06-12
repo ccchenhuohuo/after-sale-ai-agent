@@ -18,46 +18,7 @@ def truncate_for_feishu(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     marker = "\n...[内容过长已截断]"
-    safety_summary = _safety_summary(text)
-    if not safety_summary:
-        return text[: max(0, limit - len(marker))] + marker
-
-    suffix = "\n\n[安全边界摘要]\n" + safety_summary + marker
-    if len(suffix) >= limit:
-        return suffix[: max(0, limit - len(marker))] + marker
-    prefix_limit = max(0, limit - len(suffix))
-    return text[:prefix_limit].rstrip() + suffix
-
-
-def _safety_summary(text: str) -> str:
-    sections = [
-        _section_text(text, "正式依据"),
-        _section_text(text, "历史参考"),
-        _section_text(text, "工单草稿"),
-    ]
-    return "\n\n".join(section for section in sections if section)
-
-
-def _section_text(text: str, field: str) -> str:
-    start = _field_position(text, field)
-    if start < 0:
-        return ""
-    next_positions = [
-        position
-        for position in (
-            _field_position(text, "历史参考"),
-            _field_position(text, "工单草稿"),
-        )
-        if position > start
-    ]
-    end = min(next_positions) if next_positions else len(text)
-    return text[start:end].strip()
-
-
-def _field_position(text: str, field: str) -> int:
-    positions = [text.find(f"{field}："), text.find(f"{field}:")]
-    found = [position for position in positions if position >= 0]
-    return min(found) if found else -1
+    return text[: max(0, limit - len(marker))].rstrip() + marker
 
 
 class FeishuResponder:

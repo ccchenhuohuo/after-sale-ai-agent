@@ -11,6 +11,7 @@ from agent_runtime.copilot.answer_contract import FEISHU_VISIBLE_REPLY_FALLBACK,
 from agent_runtime.feishu.admission import BotIdentity, should_accept
 from agent_runtime.feishu.bridge import (
     FeishuMessageEvent,
+    build_feishu_user_input,
     clear_runtime_state_for_tests,
     effective_thread_id,
     event_from_payload,
@@ -195,6 +196,30 @@ def test_should_handle_event_requires_target_group_and_trigger():
     assert not should_handle_event(other_group, settings)
     assert not should_handle_event(no_trigger, settings)
     assert not should_handle_event(mentioned_someone_else, settings)
+
+
+def test_build_feishu_user_input_strips_mention_before_trigger(tmp_path):
+    settings = settings_for_tmp(tmp_path, feishu_bot_mention_name="飞书 CLI")
+    event = FeishuMessageEvent(
+        event_id="evt_1",
+        chat_id="oc_target",
+        chat_type="group",
+        message_id="om_msg",
+        message_type="text",
+        sender_id="ou_sender",
+        content="@飞书 CLI AI分析：L023 收到后不亮",
+        mention_names=("飞书 CLI",),
+    )
+    placeholder_event = FeishuMessageEvent(
+        **{
+            **event.__dict__,
+            "message_id": "om_msg_2",
+            "content": "@_user_1 AI分析：T081 一推就掉",
+        }
+    )
+
+    assert build_feishu_user_input(event, settings) == "L023 收到后不亮"
+    assert build_feishu_user_input(placeholder_event, settings) == "T081 一推就掉"
 
 
 def test_should_handle_event_allows_prefix_trigger():
@@ -387,6 +412,30 @@ def test_chat_messages_list_payload_normalizes_mentions_and_sender():
         mention_names=("飞书 CLI",),
         mention_ids=("ou_bot",),
     )
+
+
+def test_chat_messages_list_body_payload_normalizes_content(tmp_path):
+    payload = {
+        "chat_id": "oc_chat",
+        "body": {"content": '{"text":"@_user_1 AI分析：L023 收到后不亮"}'},
+        "mentions": [{"id": "ou_bot", "key": "@_user_1", "name": "飞书 CLI"}],
+        "message_id": "om_msg_4",
+        "msg_type": "text",
+        "sender": {
+            "id": "ou_sender",
+            "id_type": "open_id",
+            "name": "陈煜",
+            "sender_type": "user",
+        },
+    }
+    settings = settings_for_tmp(tmp_path, feishu_bot_mention_name="飞书 CLI")
+
+    event = event_from_payload(payload)
+
+    assert event is not None
+    assert event.content == "@_user_1 AI分析：L023 收到后不亮"
+    assert event.mention_ids == ("ou_bot",)
+    assert build_feishu_user_input(event, settings) == "L023 收到后不亮"
 
 
 class _FakeReplyBodyBuilder:
@@ -945,7 +994,7 @@ def test_feishu_agent_returns_visible_natural_reply(monkeypatch, tmp_path):
 
     reply = asyncio.run(bridge.run_support_agent_for_event(event, settings))
 
-    assert "可以先这样和客户沟通" in reply
+    assert "客服可以先这样回应客户" in reply
     assert "AI 客服参考" not in reply
     assert "问题类型：" not in reply
     assert "Agent SDK" not in reply

@@ -70,6 +70,7 @@ trace metadata 会包含 `entrypoint`、`loop_version`、`source`、`model_label
 飞书 SDK 长连接入口会在同一个 trace group 下记录完整事件生命周期：
 
 - `receive_event`：SDK WebSocket 收到事件，只记录 event type 和 `event_id_hash`。
+- `backfill_poll`：短周期回扫目标群最近消息，兜底 SDK WebSocket 漏推，只记录群 hash 和回扫窗口。
 - `parse_event`：将 SDK payload 解析为内部 `FeishuMessageEvent`。
 - `feishu_event`：单个飞书消息处理的根业务 span。
 - `admission_gate`：群白名单、@ 机器人、用户白名单、过期事件和 bot loop gate。

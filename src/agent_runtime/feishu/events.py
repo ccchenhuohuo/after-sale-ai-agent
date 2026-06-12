@@ -33,6 +33,13 @@ def _field(payload: dict[str, Any], *names: str) -> str:
     return ""
 
 
+def _content(payload: dict[str, Any]) -> object:
+    if "content" in payload:
+        return payload.get("content")
+    body = payload.get("body") if isinstance(payload.get("body"), dict) else {}
+    return body.get("content")
+
+
 def _mention_names(mentions: object) -> tuple[str, ...]:
     if not isinstance(mentions, list):
         return ()
@@ -93,7 +100,7 @@ def event_from_payload(payload: dict[str, Any]) -> FeishuMessageEvent | None:
         message_id=str(payload.get("message_id") or payload.get("id") or ""),
         message_type=str(payload.get("message_type") or payload.get("msg_type") or ""),
         sender_id=str(payload.get("sender_id") or sender_id.get("open_id") or sender.get("id") or ""),
-        content=extract_text_content(payload.get("content")),
+        content=extract_text_content(_content(payload)),
         sender_type=str(payload.get("sender_type") or sender.get("sender_type") or ""),
         mention_names=_mention_names(mentions),
         mention_ids=_mention_ids(mentions),

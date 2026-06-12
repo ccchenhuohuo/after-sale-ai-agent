@@ -99,6 +99,9 @@ FEISHU_BOT_MENTION_NAME=飞书 CLI
 FEISHU_RUNTIME_DB_PATH=data/feishu_runtime/runtime.sqlite3
 SUPPORT_AGENT_SESSION_DB_PATH=data/feishu_runtime/agent_sessions.sqlite3
 FEISHU_EVENT_CONCURRENCY=5
+FEISHU_BACKFILL_ENABLED=true
+FEISHU_BACKFILL_INTERVAL_SECONDS=10
+FEISHU_BACKFILL_LOOKBACK_SECONDS=180
 ```
 
 ## 答案格式
@@ -125,7 +128,7 @@ Agent 内部结构化输出和终端调试输出必须按以下顺序保留字�
 
 终端运行时使用内存中的 SDK `SQLiteSession`。同一个 `chatcopilot` 进程内的正常对话共享会话，后续问题可以看到前文；重启终端后会开启新的内存会话。
 
-飞书运行时按 `chat_id + thread_id/root_id/message_id` 隔离 session、队列和 tracing group。同一话题串行处理，不同话题可并行处理。运行时 SQLite 台账位于 `FEISHU_RUNTIME_DB_PATH`，用于记录 dedup、回复状态和错误摘要；Agent 多轮上下文位于 `SUPPORT_AGENT_SESSION_DB_PATH`，同一飞书话题可跨消息共享历史。
+飞书运行时按 `chat_id + thread_id/root_id/message_id` 隔离 session、队列和 tracing group。同一话题串行处理，不同话题可并行处理。运行时 SQLite 台账位于 `FEISHU_RUNTIME_DB_PATH`，用于记录 dedup、回复状态和错误摘要；Agent 多轮上下文位于 `SUPPORT_AGENT_SESSION_DB_PATH`，同一飞书话题可跨消息共享历史。长连接入口默认启用短周期 backfill，会按 `FEISHU_BACKFILL_LOOKBACK_SECONDS` 回扫测试群最近消息，兜底 Feishu SDK WebSocket 漏推；回扫消息仍走同一 admission、dedup、queue 和 reply ledger。
 
 - `/clear` 会删除所有 session item。
 - `/compact` 会用当前模型压缩会话，清除旧内容，并保留一条摘要。

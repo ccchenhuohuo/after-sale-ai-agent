@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 
 from agents import Runner, SQLiteSession, custom_span, flush_traces, trace
@@ -96,9 +97,14 @@ def should_handle_event(event: FeishuMessageEvent, settings: Settings) -> bool:
 
 
 def build_feishu_user_input(event: FeishuMessageEvent, settings: Settings) -> str:
-    text = strip_trigger_prefix(event.content, settings.support_agent_trigger_prefix)
+    text = event.content.strip()
     if settings.feishu_bot_mention_name:
         text = text.replace(f"@{settings.feishu_bot_mention_name}", "").replace(settings.feishu_bot_mention_name, "")
+    for mention_name in event.mention_names:
+        if mention_name:
+            text = text.replace(f"@{mention_name}", "").replace(mention_name, "")
+    text = re.sub(r"@_user_\d+", "", text)
+    text = strip_trigger_prefix(text, settings.support_agent_trigger_prefix)
     return text.strip() or event.content.strip()
 
 

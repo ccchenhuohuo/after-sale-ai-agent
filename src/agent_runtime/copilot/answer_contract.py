@@ -46,6 +46,10 @@ FORBIDDEN_COMMITMENT_REGEX_PATTERNS = [
     re.compile(r"(?:建议|安排|同意|可走|给客户|为客户|直接)[^。；，,\n]{0,8}(?:退款|赔偿|赔付|换新|补发)"),
     re.compile(r"(?:退款|赔偿|赔付|换新|补发)[^。；，,\n]{0,8}(?:处理|方案|给客户|为客户)"),
     re.compile(r"(?:承诺|确认|保证)[^。；，,\n]{0,8}(?:维修时效|维修时间|处理时效)"),
+    re.compile(r"(?:承诺|确认|保证|确保)[^。；，,\n]{0,24}(?:\d+\s*(?:小时|天|个工作日)|当天|今日|明天|本周)[^。；，,\n]{0,16}(?:跟进|回复|处理|解决|完成|寄出|发出|补发|维修)"),
+    re.compile(r"(?:\d+\s*(?:小时|天|个工作日)|当天|今日|明天|本周)[^。；，,\n]{0,16}(?:跟进|回复|处理|解决|完成|寄出|发出|补发|维修)"),
+    re.compile(r"(?:尽快|尽早|马上|立即|立刻|第一时间)[^。；，,\n]{0,16}(?:回复|答复|处理|跟进|解决|安排|通知)"),
+    re.compile(r"(?:已|已经)?[^。；，,\n]{0,4}(?:转交|提交|升级|安排|反馈)[^。；，,\n]{0,20}(?:跟进|处理|回复|答复|解决|核实)"),
 ]
 
 NEGATED_COMMITMENT_PREFIXES = ["不要", "不能", "不可", "不得", "不建议", "未获得正式政策依据前，不要"]
@@ -76,6 +80,7 @@ FEISHU_VISIBLE_INTERNAL_PATTERNS = [
 FEISHU_VISIBLE_MARKDOWN_PATTERNS = [
     re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE),
     re.compile(r"^\s{0,3}(?:[-*+]\s+|\d+[.)]\s+)", re.MULTILINE),
+    re.compile(r"(?:^|[：:；;。]\s*)\d+[.)]\s+", re.MULTILINE),
     re.compile(r"^\s{0,3}\|.*\|\s*$", re.MULTILINE),
     re.compile(r"```"),
     re.compile(r"`[^`]+`"),
@@ -205,7 +210,7 @@ def render_feishu_reply(answer: SupportAnswer | dict) -> str:
     answer = _coerce_support_answer(answer)
     paragraphs = [
         _intro_paragraph(answer),
-        f"可以先这样和客户沟通：{_visible_text(answer.suggested_reply)}",
+        f"客服可以先这样回应客户：{_visible_text(answer.suggested_reply)}",
     ]
     action_paragraph = _action_paragraph(answer)
     if action_paragraph:
@@ -403,6 +408,10 @@ def _visible_text(value: str) -> str:
             lines.append(clean)
     text = "；".join(lines)
     text = re.sub(r"[`*_#|]+", "", text)
+    text = re.sub(r"(?:^|(?<=[：:；;。])\s*)\d+[.)]\s*", "", text)
+    text = re.sub(r"\s+\d+[.)]\s*", "；", text)
+    text = re.sub(r"([：:；;])\s*[；;]+", r"\1", text)
+    text = re.sub(r"[；;]{2,}", "；", text)
     text = re.sub(r"\s+", " ", text).strip()
     replacements = {
         "未查询到可信正式依据": "目前还没有足够材料直接下结论",

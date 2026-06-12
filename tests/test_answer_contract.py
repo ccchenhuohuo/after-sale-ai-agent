@@ -128,6 +128,12 @@ def test_forbidden_commitment_synonyms_are_reported():
         "安排补发配件。",
         "同意退款处理。",
         "可走赔付方案。",
+        "我们承诺会在24小时内由专人跟进。",
+        "当天完成维修处理。",
+        "我们会尽快给您答复。",
+        "已转交产品负责人跟进。",
+        "有结果会第一时间通知您。",
+        "已反馈给技术组核实。",
     ]
 
     for text in cases:
@@ -206,7 +212,7 @@ def test_feishu_visible_reply_renders_natural_text_without_internal_format():
     ]
     assert not any(term in rendered for term in blocked_terms)
     assert not any(line.lstrip().startswith(("-", "#", "1.")) for line in rendered.splitlines())
-    assert "可以先这样和客户沟通" in rendered
+    assert "客服可以先这样回应客户" in rendered
     assert "目前材料还不够直接下结论" in rendered
     assert validate_feishu_visible_reply(rendered) == []
 
@@ -220,6 +226,38 @@ def test_feishu_visible_reply_validation_blocks_internal_markdown_and_commitment
     assert any(issue.code == "visible_markdown" for issue in issues)
     assert any(issue.code == "forbidden_commitment" for issue in issues)
     assert validate_feishu_visible_reply("目前信息不足，不要承诺退款、换新或补发。") == []
+    assert validate_feishu_visible_reply("先不要承诺24小时内处理，需要人工确认。") == []
+
+
+def test_feishu_visible_reply_validation_blocks_time_commitment():
+    issues = validate_feishu_visible_reply("我们承诺会在24小时内由专人跟进。")
+
+    assert any(issue.code == "forbidden_commitment" for issue in issues)
+
+
+def test_feishu_visible_reply_removes_inline_numbered_list():
+    answer = SupportAnswer(
+        issue_type="troubleshooting",
+        run_mode="Agent SDK",
+        confidence="低",
+        confidence_reason="未查询到可信正式依据。",
+        user_issue_summary="客户反馈设备异常。",
+        sku_match="未在 SKU 目录中命中；需要补充订单 SKU、包装 SKU、产品铭牌或图片。",
+        suggested_reply="请确认以下信息：1. 产品型号 2. 故障视频 3. 订单号。",
+        troubleshooting_steps=["1. 确认型号", "2. 收集截图"],
+        follow_up_questions=["请补充 SKU"],
+        official_evidence="未查询到可信正式依据，不可编造。",
+        history_reference="未查询到可信历史参考，不可编造。",
+        ticket_draft="不建议生成工单，并说明原因。",
+    )
+
+    rendered = render_feishu_reply(answer)
+
+    assert "1." not in rendered
+    assert "2." not in rendered
+    assert "3." not in rendered
+    assert "：；" not in rendered
+    assert validate_feishu_visible_reply(rendered) == []
 
 
 def test_support_answer_contract_issues_for_forbidden_commitment():

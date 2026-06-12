@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import threading
+import time
 from abc import ABC, abstractmethod
 from concurrent.futures import Future
 from typing import Any, Awaitable, Callable
@@ -12,6 +13,7 @@ from typing import Any, Awaitable, Callable
 import httpx
 from agents import custom_span
 
+from agent_runtime.feishu.message_sender import FEISHU_BASE_URL, get_tenant_access_token
 from agent_runtime.settings import Settings
 
 
@@ -224,6 +226,59 @@ async def fetch_bot_open_id(settings: Settings) -> str:
     except (httpx.HTTPError, ValueError, TypeError):
         logger.warning("Failed to fetch Feishu bot identity.", exc_info=True)
         return ""
+
+
+async def fetch_recent_chat_messages(
+    settings: Settings,
+    *,
+    now: float | None = None,
+) -> list[dict[str, Any]]:
+    if not settings.feishu_support_group_chat_id:
+        return []
+    token = await get_tenant_access_token(settings)
+    end_time = int(now or time.time()) + 5
+    start_time = max(0, end_time - max(1, settings.feishu_backfill_lookback_seconds))
+    page_size = min(max(1, settings.feishu_backfill_page_size), 100)
+    messages: list[dict[str, Any]] = []
+    page_token = ""
+    async with httpx.AsyncClient(timeout=15) as client:
+        for _ in range(3):
+            params: dict[str, object] = {
+                "container_id_type": "chat",
+                "container_id": settings.feishu_support_group_chat_id,
+                "start_time": start_time,
+                "end_time": end_time,
+                "page_size": page_size,
+            }
+            if page_token:
+                params["page_token"] = page_token
+            response = await client.get(
+                f"{FEISHU_BASE_URL}/im/v1/messages",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            code = int(payload.get("code", 0) or 0)
+            if code != 0:
+                raise RuntimeError(f"Failed to list Feishu messages: code={code} msg={payload.get('msg')}")
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            for item in data.get("items") or []:
+                if isinstance(item, dict):
+                    messages.append(item)
+            if not data.get("has_more"):
+                break
+            page_token = str(data.get("page_token") or "")
+            if not page_token:
+                break
+    return sorted(messages, key=_message_sort_key)
+
+
+def _message_sort_key(message: dict[str, Any]) -> tuple[int, str]:
+    raw_time = str(message.get("create_time") or message.get("create_time_ms") or "")
+    if raw_time.isdigit():
+        return int(raw_time), str(message.get("message_id") or message.get("id") or "")
+    return 0, str(message.get("message_id") or message.get("id") or "")
 
 
 def _set_future_result(result: Future[int], value: int) -> None:

@@ -13,6 +13,7 @@ from agent_runtime.feishu.bridge import event_from_payload, process_message_even
 from agent_runtime.feishu.event_sources import (
     LarkOapiEventSource,
     fetch_bot_open_id,
+    fetch_recent_chat_messages,
 )
 from agent_runtime.settings import Settings, get_settings
 
@@ -70,6 +71,45 @@ def _track_processing_task(
     task.add_done_callback(tasks.discard)
 
 
+async def _backfill_loop(
+    tasks: set[asyncio.Task[None]],
+    settings: Settings,
+    semaphore: asyncio.Semaphore,
+    bot_identity: BotIdentity,
+) -> None:
+    interval_seconds = max(1.0, settings.feishu_backfill_interval_seconds)
+    while True:
+        try:
+            await _backfill_once(tasks, settings, semaphore, bot_identity)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Feishu message backfill poll failed.", exc_info=True)
+        await asyncio.sleep(interval_seconds)
+
+
+async def _backfill_once(
+    tasks: set[asyncio.Task[None]],
+    settings: Settings,
+    semaphore: asyncio.Semaphore,
+    bot_identity: BotIdentity,
+) -> int:
+    with custom_span(
+        "backfill_poll",
+        {
+            "chat_id_hash": _short_hash(settings.feishu_support_group_chat_id),
+            "lookback_seconds": settings.feishu_backfill_lookback_seconds,
+            "page_size": settings.feishu_backfill_page_size,
+        },
+    ):
+        payloads = await fetch_recent_chat_messages(settings)
+    for payload in payloads:
+        _track_processing_task(tasks, payload, settings, semaphore, bot_identity)
+    if payloads:
+        logger.info("Feishu message backfill scheduled %s recent payload(s).", len(payloads))
+    return len(payloads)
+
+
 async def consume_long_connection(settings: Settings | None = None) -> int:
     settings = settings or get_settings()
     event_concurrency = max(1, settings.feishu_event_concurrency)
@@ -82,21 +122,39 @@ async def consume_long_connection(settings: Settings | None = None) -> int:
         names=(settings.feishu_bot_mention_name,) if settings.feishu_bot_mention_name else (),
     )
     event_source = LarkOapiEventSource(settings)
+    backfill_task: asyncio.Task[None] | None = None
     try:
         logger.info("Feishu SDK WebSocket event source selected.")
         logger.info("Feishu event concurrency limit: %s.", event_concurrency)
         if bot_open_id:
             logger.info("Feishu bot open_id detected.")
+        if settings.feishu_backfill_enabled:
+            logger.info(
+                "Feishu message backfill enabled: interval=%ss lookback=%ss.",
+                settings.feishu_backfill_interval_seconds,
+                settings.feishu_backfill_lookback_seconds,
+            )
+            backfill_task = asyncio.create_task(_backfill_loop(tasks, settings, semaphore, bot_identity))
 
         async def schedule_payload(payload: dict[str, Any]) -> None:
             _track_processing_task(tasks, payload, settings, semaphore, bot_identity)
 
         return await event_source.run(schedule_payload)
     finally:
+        if backfill_task is not None:
+            backfill_task.cancel()
+            try:
+                await backfill_task
+            except asyncio.CancelledError:
+                pass
         if tasks:
             _, pending = await asyncio.wait(tasks, timeout=30)
             for task in pending:
                 task.cancel()
+
+
+def _short_hash(value: str) -> str:
+    return hashlib.sha1(value.encode("utf-8")).hexdigest()[:12] if value else ""
 
 
 async def _amain() -> int:

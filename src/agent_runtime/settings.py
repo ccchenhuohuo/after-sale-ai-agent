@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     feishu_allowed_user_open_ids: str = ""
     feishu_event_concurrency: int = 5
     feishu_event_max_age_seconds: int = 1800
+    feishu_backfill_enabled: bool = True
+    feishu_backfill_interval_seconds: float = 10.0
+    feishu_backfill_lookback_seconds: int = 180
+    feishu_backfill_page_size: int = 50
     feishu_bot_loop_max_turns: int = 3
     feishu_dedup_ttl_seconds: int = 43200
     feishu_dedup_max_items: int = 5000

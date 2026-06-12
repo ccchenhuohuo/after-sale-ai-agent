@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -39,7 +40,13 @@ FORBIDDEN_COMMITMENT_PATTERNS = [
     "维修时效",
 ]
 
-NEGATED_COMMITMENT_PREFIXES = ["不要", "不能", "不可", "不得", "未获得正式政策依据前，不要"]
+FORBIDDEN_COMMITMENT_REGEX_PATTERNS = [
+    re.compile(r"(?:建议|安排|同意|可走|给客户|为客户|直接)[^。；，,\n]{0,8}(?:退款|赔偿|赔付|换新|补发)"),
+    re.compile(r"(?:退款|赔偿|赔付|换新|补发)[^。；，,\n]{0,8}(?:处理|方案|给客户|为客户)"),
+    re.compile(r"(?:承诺|确认|保证)[^。；，,\n]{0,8}(?:维修时效|维修时间|处理时效)"),
+]
+
+NEGATED_COMMITMENT_PREFIXES = ["不要", "不能", "不可", "不得", "不建议", "未获得正式政策依据前，不要"]
 
 
 @dataclass(frozen=True)
@@ -92,10 +99,25 @@ def _contains_forbidden_commitment(text: str, pattern: str) -> bool:
         index = text.find(pattern, start)
         if index < 0:
             return False
-        prefix = text[max(0, index - 16) : index]
-        if not any(negation in prefix for negation in NEGATED_COMMITMENT_PREFIXES):
+        if not _has_negated_commitment_context(text, index):
             return True
         start = index + len(pattern)
+
+
+def _contains_forbidden_commitment_regex(text: str, pattern: re.Pattern[str]) -> bool:
+    start = 0
+    while True:
+        match = pattern.search(text, start)
+        if match is None:
+            return False
+        if not _has_negated_commitment_context(text, match.start()):
+            return True
+        start = match.end()
+
+
+def _has_negated_commitment_context(text: str, start: int) -> bool:
+    context = text[max(0, start - 16) : start + 8]
+    return any(negation in context for negation in NEGATED_COMMITMENT_PREFIXES)
 
 
 def validate_answer_contract(
@@ -124,6 +146,9 @@ def validate_answer_contract(
     for pattern in FORBIDDEN_COMMITMENT_PATTERNS:
         if _contains_forbidden_commitment(text, pattern):
             issues.append(ContractIssue("forbidden_commitment", f"可能包含售后承诺：{pattern}"))
+    for pattern in FORBIDDEN_COMMITMENT_REGEX_PATTERNS:
+        if _contains_forbidden_commitment_regex(text, pattern):
+            issues.append(ContractIssue("forbidden_commitment", f"可能包含售后承诺：{pattern.pattern}"))
 
     official_section = _section_text(text, "正式依据")
     if not official_kb_connected and official_section and "未查询到可信正式依据" not in official_section:

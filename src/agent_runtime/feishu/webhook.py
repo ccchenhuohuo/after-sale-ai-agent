@@ -20,7 +20,7 @@ def _verify_token(payload: dict[str, Any], settings: Settings) -> None:
         return
     header = payload.get("header") if isinstance(payload.get("header"), dict) else {}
     token = payload.get("token") or header.get("token")
-    if token and token != settings.feishu_verification_token:
+    if not token or token != settings.feishu_verification_token:
         raise HTTPException(status_code=403, detail="invalid Feishu verification token")
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 
@@ -13,6 +14,12 @@ def _hash(value: str) -> str:
     return hashlib.sha1(value.encode("utf-8")).hexdigest()[:12] if value else ""
 
 
+@dataclass(frozen=True)
+class EventClaim:
+    status: str
+    should_process: bool
+
+
 class RuntimeStore:
     def __init__(self, db_path: str, ttl_seconds: int, max_items: int) -> None:
         self.db_path = Path(db_path)
@@ -21,33 +28,57 @@ class RuntimeStore:
         self._lock = Lock()
         self._ensure_schema()
 
-    def try_record_event(self, event: FeishuMessageEvent) -> bool:
+    def claim_event(self, event: FeishuMessageEvent) -> EventClaim:
         event_key = event.message_id or event.event_id
         if not event_key:
-            return True
+            return EventClaim(status="processing", should_process=True)
         now = time.time()
         with self._lock, self._connect() as connection:
             self._prune(connection, now)
-            try:
-                connection.execute(
-                    """
-                    INSERT INTO seen_events (
-                        event_key, message_id, event_id, chat_id_hash, thread_id_hash, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        event_key,
-                        event.message_id,
-                        event.event_id,
-                        _hash(event.chat_id),
-                        _hash(effective_thread_id(event)),
-                        now,
-                    ),
-                )
-            except sqlite3.IntegrityError:
-                return False
+            row = connection.execute(
+                "SELECT status FROM seen_events WHERE event_key = ?",
+                (event_key,),
+            ).fetchone()
+            if row is not None:
+                previous_status = str(row[0] or "")
+                if previous_status in {"agent_failed", "reply_failed"}:
+                    connection.execute(
+                        "UPDATE seen_events SET status = ?, updated_at = ? WHERE event_key = ?",
+                        ("processing", now, event_key),
+                    )
+                    return EventClaim(status=f"retry_{previous_status}", should_process=True)
+                return EventClaim(status="duplicate", should_process=False)
+
+            connection.execute(
+                """
+                INSERT INTO seen_events (
+                    event_key, message_id, event_id, chat_id_hash, thread_id_hash, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_key,
+                    event.message_id,
+                    event.event_id,
+                    _hash(event.chat_id),
+                    _hash(effective_thread_id(event)),
+                    "processing",
+                    now,
+                    now,
+                ),
+            )
             self._trim(connection)
-            return True
+            return EventClaim(status="processing", should_process=True)
+
+    def try_record_event(self, event: FeishuMessageEvent) -> bool:
+        return self.claim_event(event).should_process
+
+    def mark_event_status(self, event: FeishuMessageEvent, status: str) -> None:
+        event_key = event.message_id or event.event_id
+        if not event_key:
+            return
+        now = time.time()
+        with self._lock, self._connect() as connection:
+            self._mark_event_status(connection, event_key, status, now)
 
     def record_reply(
         self,
@@ -81,6 +112,7 @@ class RuntimeStore:
                     now,
                 ),
             )
+            self._mark_event_status(connection, event.message_id or event.event_id, status, now)
 
     def record_event_error(self, stage: str, event: FeishuMessageEvent, error: str) -> None:
         now = time.time()
@@ -101,6 +133,8 @@ class RuntimeStore:
                     now,
                 ),
             )
+        if stage == "agent":
+            self.mark_event_status(event, "agent_failed")
 
     def record_sender_turn(self, event: FeishuMessageEvent, is_bot_sender: bool) -> int:
         key = queue_key_for_event(event)
@@ -152,7 +186,9 @@ class RuntimeStore:
                     event_id TEXT NOT NULL DEFAULT '',
                     chat_id_hash TEXT NOT NULL DEFAULT '',
                     thread_id_hash TEXT NOT NULL DEFAULT '',
-                    created_at REAL NOT NULL
+                    status TEXT NOT NULL DEFAULT 'processing',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS idx_seen_events_created_at
                     ON seen_events(created_at);
@@ -185,6 +221,26 @@ class RuntimeStore:
                     updated_at REAL NOT NULL
                 );
                 """
+            )
+            self._ensure_seen_events_columns(connection)
+
+    def _ensure_seen_events_columns(self, connection: sqlite3.Connection) -> None:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(seen_events)").fetchall()}
+        if "status" not in columns:
+            connection.execute("ALTER TABLE seen_events ADD COLUMN status TEXT NOT NULL DEFAULT 'replied'")
+        if "updated_at" not in columns:
+            connection.execute("ALTER TABLE seen_events ADD COLUMN updated_at REAL NOT NULL DEFAULT 0")
+
+    def _event_exists(self, connection: sqlite3.Connection, event_key: str) -> bool:
+        return connection.execute("SELECT 1 FROM seen_events WHERE event_key = ?", (event_key,)).fetchone() is not None
+
+    def _mark_event_status(self, connection: sqlite3.Connection, event_key: str, status: str, now: float) -> None:
+        if not event_key:
+            return
+        if self._event_exists(connection, event_key):
+            connection.execute(
+                "UPDATE seen_events SET status = ?, updated_at = ? WHERE event_key = ?",
+                (status, now, event_key),
             )
 
     def _prune(self, connection: sqlite3.Connection, now: float) -> None:

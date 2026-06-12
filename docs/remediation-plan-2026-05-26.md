@@ -7,7 +7,7 @@
 ## 已完成修复
 
 - `docs/obsidian-master-note.md` 已从断链修复为可打开的 Obsidian 软链接。
-- 当前目标文件：`/Users/chenyu/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian/WashMyBrain/飞书客服群 AI 智能客服支持 MVP 方案汇总.md`
+- 当前目标文件：本机 Obsidian vault 中的 `WashMyBrain/飞书客服群 AI 智能客服支持 MVP 方案汇总.md`；绝对路径只保留在软链接目标中，不写入仓库文档。
 - 验证方式：`test -e docs/obsidian-master-note.md` 通过，且可读取文档开头 metadata。
 - 飞书采集脚本已改为默认 dry-run；所有 Base/Drive 写操作需要显式 `--apply`。
 - 飞书采集目标已从脚本硬编码默认值改为环境变量或 CLI 参数。

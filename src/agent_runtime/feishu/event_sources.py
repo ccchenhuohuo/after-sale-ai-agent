@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import threading
@@ -9,6 +10,7 @@ from concurrent.futures import Future
 from typing import Any, Awaitable, Callable
 
 import httpx
+from agents import custom_span
 
 from agent_runtime.settings import Settings
 
@@ -70,11 +72,20 @@ class LarkOapiEventSource(FeishuEventSource):
             def on_message(data: Any) -> None:
                 try:
                     payload = payload_from_lark_oapi_event(data)
-                    logger.info(
-                        "Received Feishu SDK event: event_type=%s event_id=%s.",
-                        _payload_event_type(payload),
-                        _payload_event_id(payload),
-                    )
+                    event_type = _payload_event_type(payload)
+                    event_id = _payload_event_id(payload)
+                    with custom_span(
+                        "receive_event",
+                        {
+                            "event_type": event_type,
+                            "event_id_hash": _short_hash(event_id),
+                        },
+                    ):
+                        logger.info(
+                            "Received Feishu SDK event: event_type=%s event_id_hash=%s.",
+                            event_type,
+                            _short_hash(event_id),
+                        )
                     future = asyncio.run_coroutine_threadsafe(handler(payload), parent_loop)
                     future.add_done_callback(_log_handler_failure)
                 except Exception:
@@ -83,9 +94,9 @@ class LarkOapiEventSource(FeishuEventSource):
             def on_ignored_event(data: Any) -> None:
                 payload = payload_from_lark_oapi_event(data)
                 logger.info(
-                    "Ignored Feishu SDK event type: event_type=%s event_id=%s.",
+                    "Ignored Feishu SDK event type: event_type=%s event_id_hash=%s.",
                     _payload_event_type(payload),
-                    _payload_event_id(payload),
+                    _short_hash(_payload_event_id(payload)),
                 )
 
             event_handler_builder = lark.EventDispatcherHandler.builder("", "").register_p2_im_message_receive_v1(
@@ -164,6 +175,10 @@ def _payload_event_type(payload: dict[str, Any]) -> str:
 def _payload_event_id(payload: dict[str, Any]) -> str:
     header = payload.get("header") if isinstance(payload.get("header"), dict) else {}
     return str(header.get("event_id") or payload.get("event_id") or "")
+
+
+def _short_hash(value: str) -> str:
+    return hashlib.sha1(value.encode("utf-8")).hexdigest()[:12] if value else ""
 
 
 def _register_optional_sdk_handler(builder: Any, method_name: str, handler: Callable[[Any], None]) -> Any:

@@ -41,13 +41,13 @@ flowchart TB
 ## 运行方式
 
 ```bash
-python3 -m venv .venv
+python3.10 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -c constraints.txt -e ".[dev]"
 cp .env.example .env
 ```
 
-在 `.env` 中填写模型与 tracing 配置后启动终端 Agent：
+运行时需要 Python 3.10+。在 `.env` 中填写模型与 tracing 配置后启动终端 Agent：
 
 ```bash
 chatcopilot
@@ -87,6 +87,8 @@ SUPPORT_AGENT_MODEL_PRO=deepseek-v4-pro
 SUPPORT_AGENT_BILLING_MODE=API Usage Billing
 ```
 
+`LLM_API_KEY` 只用于实际模型调用，例如 DeepSeek 的 OpenAI-compatible endpoint。`OPENAI_TRACING_API_KEY` 只用于向 OpenAI Platform 导出 Agents SDK traces；当使用非 OpenAI 模型且开启 tracing 时，两者应分开配置。
+
 飞书桥接至少需要以下配置：
 
 ```env
@@ -95,6 +97,7 @@ FEISHU_APP_SECRET=
 FEISHU_SUPPORT_GROUP_CHAT_ID=oc_xxx
 FEISHU_BOT_MENTION_NAME=飞书 CLI
 FEISHU_RUNTIME_DB_PATH=data/feishu_runtime/runtime.sqlite3
+SUPPORT_AGENT_SESSION_DB_PATH=data/feishu_runtime/agent_sessions.sqlite3
 FEISHU_EVENT_CONCURRENCY=5
 ```
 
@@ -120,7 +123,7 @@ Agent 必须按以下顺序输出字段：
 
 终端运行时使用内存中的 SDK `SQLiteSession`。同一个 `chatcopilot` 进程内的正常对话共享会话，后续问题可以看到前文；重启终端后会开启新的内存会话。
 
-飞书运行时按 `chat_id + thread_id/root_id/message_id` 隔离 session、队列和 tracing group。同一话题串行处理，不同话题可并行处理。运行时 SQLite 台账位于 `FEISHU_RUNTIME_DB_PATH`，用于记录 dedup、回复状态和错误摘要。
+飞书运行时按 `chat_id + thread_id/root_id/message_id` 隔离 session、队列和 tracing group。同一话题串行处理，不同话题可并行处理。运行时 SQLite 台账位于 `FEISHU_RUNTIME_DB_PATH`，用于记录 dedup、回复状态和错误摘要；Agent 多轮上下文位于 `SUPPORT_AGENT_SESSION_DB_PATH`，同一飞书话题可跨消息共享历史。
 
 - `/clear` 会删除所有 session item。
 - `/compact` 会用当前模型压缩会话，清除旧内容，并保留一条摘要。
@@ -128,8 +131,8 @@ Agent 必须按以下顺序输出字段：
 
 ## 关键参考
 
-- 资料索引：[docs/source-index.md](</Users/chenyu/Documents/workplace/agent_runtime(test)/docs/source-index.md>)
-- Obsidian 总设计笔记：[docs/obsidian-master-note.md](</Users/chenyu/Documents/workplace/agent_runtime(test)/docs/obsidian-master-note.md>)，该文件是指向 Obsidian vault 的软链接。
+- 资料索引：[docs/source-index.md](docs/source-index.md)
+- Obsidian 总设计笔记：[docs/obsidian-master-note.md](docs/obsidian-master-note.md)，该文件是指向 Obsidian vault 的软链接。
 - OpenAI Traces 仪表盘：https://platform.openai.com/logs?api=traces
 
 ## 项目地图

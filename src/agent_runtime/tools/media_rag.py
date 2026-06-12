@@ -92,6 +92,17 @@ def _load_embeddings(path: Path) -> np.ndarray | None:
     return np.load(path)
 
 
+def _load_manifest(index_dir: Path) -> dict[str, Any]:
+    path = index_dir / "manifest.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _extract_embedding_payload(payload: dict[str, Any]) -> list[list[float]]:
     output = payload.get("output")
     if isinstance(output, dict) and isinstance(output.get("embeddings"), list):
@@ -152,13 +163,25 @@ def _query_embedding(settings: Settings, query: str) -> np.ndarray | None:
     return None
 
 
-def _chunk_media_file(chunk: dict[str, Any]) -> Path | None:
+def _chunk_media_file(
+    chunk: dict[str, Any],
+    *,
+    index_dir: Path | None = None,
+    manifest: dict[str, Any] | None = None,
+) -> Path | None:
     path_text = _clean(chunk.get("media_file_path"))
     if not path_text:
         return None
     path = Path(path_text)
-    if path.exists() and path.suffix.lower() in IMAGE_SUFFIXES:
-        return path
+    candidates = [path] if path.is_absolute() else [path, ROOT / path]
+    if index_dir is not None and not path.is_absolute():
+        candidates.append(index_dir / path)
+    source_staging_dir = _clean((manifest or {}).get("source_staging_dir"))
+    if source_staging_dir and not path.is_absolute():
+        candidates.append(Path(source_staging_dir) / path)
+    for candidate in candidates:
+        if candidate.exists() and candidate.suffix.lower() in IMAGE_SUFFIXES:
+            return candidate
     return None
 
 
@@ -169,14 +192,19 @@ def _media_url(chunk: dict[str, Any]) -> str:
     return ""
 
 
-def _rerank_document(chunk: dict[str, Any]) -> dict[str, str]:
+def _rerank_document(
+    chunk: dict[str, Any],
+    *,
+    index_dir: Path | None = None,
+    manifest: dict[str, Any] | None = None,
+) -> dict[str, str]:
     media_url = _media_url(chunk)
     media_type = _clean(chunk.get("media_type")).lower()
     if media_url and "video" in media_type:
         return {"video": media_url}
     if media_url and "image" in media_type:
         return {"image": media_url}
-    media_file = _chunk_media_file(chunk)
+    media_file = _chunk_media_file(chunk, index_dir=index_dir, manifest=manifest)
     if media_file:
         return {"image": _image_data_uri(media_file)}
     return {"text": _clean(chunk.get("text"))[:REMOTE_TEXT_MAX_CHARS]}
@@ -186,6 +214,9 @@ def _bailian_vl_rerank(
     settings: Settings,
     query: str,
     chunks: list[dict[str, Any]],
+    *,
+    index_dir: Path | None = None,
+    manifest: dict[str, Any] | None = None,
     timeout: float = 120.0,
 ) -> dict[str, float] | None:
     api_key = settings.resolved_bailian_api_key
@@ -198,7 +229,7 @@ def _bailian_vl_rerank(
                 "model": settings.media_rag_rerank_model,
                 "input": {
                     "query": {"text": _clean(query)[:REMOTE_TEXT_MAX_CHARS]},
-                    "documents": [_rerank_document(chunk) for chunk in chunks],
+                    "documents": [_rerank_document(chunk, index_dir=index_dir, manifest=manifest) for chunk in chunks],
                 },
                 "parameters": {
                     "return_documents": False,
@@ -293,6 +324,7 @@ def search_media_rag(
 ) -> str:
     settings = settings or get_settings()
     index_dir = _path(settings.media_rag_index_path)
+    manifest = _load_manifest(index_dir)
     chunks = _load_jsonl(index_dir / "media_chunks.jsonl")
     if not chunks:
         return f"未查询到可信媒体观察证据：媒体证据索引不存在或为空（{index_dir}）。"
@@ -355,7 +387,11 @@ def search_media_rag(
         },
     ):
         candidate_chunks = [chunk for _, chunk in candidates]
-        rerank_scores = _bailian_vl_rerank(settings, query, candidate_chunks) if settings.media_rag_provider == "bailian_vl" else None
+        rerank_scores = (
+            _bailian_vl_rerank(settings, query, candidate_chunks, index_dir=index_dir, manifest=manifest)
+            if settings.media_rag_provider == "bailian_vl"
+            else None
+        )
         if rerank_scores is None and settings.media_rag_require_vl_models:
             return (
                 "未查询到可信媒体观察证据：媒体证据 qwen3-vl-rerank 服务不可用，"

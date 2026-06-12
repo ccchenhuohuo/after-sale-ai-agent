@@ -129,7 +129,7 @@ flowchart LR
 
 现有飞书 Base 原型名为 `售后问题 AI 闭环库`。
 
-它应作为经验层参考来源，而不是最终 schema。细节见 [base-demo-reference.md](</Users/chenyu/Documents/workplace/agent_runtime(test)/docs/base-demo-reference.md>)。
+它应作为经验层参考来源，而不是最终 schema。细节见 [base-demo-reference.md](base-demo-reference.md)。
 
 可复用思路：
 
@@ -151,7 +151,7 @@ flowchart LR
 
 鲁工共享了第二个 Base：`2026年品质团队跟进事项清单`。
 
-这个 Base 对字段分类和已审核品质跟进记录更有参考价值。细节见 [quality-followup-base.md](</Users/chenyu/Documents/workplace/agent_runtime(test)/docs/quality-followup-base.md>)。
+这个 Base 对字段分类和已审核品质跟进记录更有参考价值。细节见 [quality-followup-base.md](quality-followup-base.md)。
 
 用法：
 
@@ -183,7 +183,7 @@ flowchart LR
 
 ## 售前补充参考
 
-另有一个飞书表格：`2026AI配置汇总表`。它是售前知识来源，不是售后支持来源。细节见 [presales-knowledge-reference.md](</Users/chenyu/Documents/workplace/agent_runtime(test)/docs/presales-knowledge-reference.md>)。
+另有一个飞书表格：`2026AI配置汇总表`。它是售前知识来源，不是售后支持来源。细节见 [presales-knowledge-reference.md](presales-knowledge-reference.md)。
 
 它包含：
 

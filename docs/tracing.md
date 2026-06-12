@@ -64,6 +64,24 @@ PHOENIX_PROJECT_NAME=agent-runtime-test
 
 trace metadata 会包含 `entrypoint`、`loop_version`、`source`、`model_label`、`history_index_available`、`media_index_available` 等非敏感字段。默认不记录用户原文、工具原文或飞书消息内容。
 
+## Feishu 端到端 Span
+
+飞书 SDK 长连接入口会在同一个 trace group 下记录完整事件生命周期：
+
+- `receive_event`：SDK WebSocket 收到事件，只记录 event type 和 `event_id_hash`。
+- `parse_event`：将 SDK payload 解析为内部 `FeishuMessageEvent`。
+- `feishu_event`：单个飞书消息处理的根业务 span。
+- `admission_gate`：群白名单、@ 机器人、用户白名单、过期事件和 bot loop gate。
+- `dedup`：SQLite runtime store claim 状态，区分首次处理、duplicate、agent/reply retry。
+- `queue_wait`：同一话题串行队列等待耗时。
+- `queue_processing`：进入 per-thread queue 后的处理阶段。
+- `agent_run`：调用 support evidence collector 和 Agent SDK 生成答案。
+- `reply_in_thread`：调用飞书 `im.v1.message.areply` 且 `reply_in_thread=true`。
+- `reply_in_thread_result`：记录 reply status、reply message hash 和 reply latency。
+- `feishu_event_status`：最终状态，例如 `replied`、`duplicate`、`reply_failed`、`ignored`。
+
+Feishu 相关 metadata 和日志只记录 `chat_id_hash`、`thread_id_hash`、`message_id_hash`、`event_id_hash`、`queue_key_hash`、状态和耗时；不写入原始飞书 ID、消息正文或客户内容。
+
 ## 查看方式
 
 1. 在广州服务器启动 Phoenix 服务。

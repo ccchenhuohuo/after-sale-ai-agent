@@ -289,3 +289,47 @@ def test_bailian_vl_rerank_uses_video_url_document(monkeypatch):
     scores = media_rag._bailian_vl_rerank(settings, "TB15 视频", chunks)
 
     assert scores == {"video": 0.77}
+
+
+def test_bailian_vl_rerank_resolves_relative_media_path_from_manifest(tmp_path, monkeypatch):
+    staging_dir = tmp_path / "staging"
+    media_dir = staging_dir / "media"
+    media_dir.mkdir(parents=True)
+    (media_dir / "proof.jpg").write_bytes(b"fake-image")
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"output": {"results": [{"index": 0, "relevance_score": 0.91}]}}
+
+    def fake_post(url, json, headers, timeout):
+        calls.append(json)
+        assert json["input"]["documents"][0]["image"].startswith("data:image/jpeg;base64,")
+        return Response()
+
+    monkeypatch.setattr(media_rag.httpx, "post", fake_post)
+    settings = Settings(bailian_api_key="test-key")
+    chunks = [
+        {
+            "chunk_id": "image",
+            "text": "T081 图片证据",
+            "media_type": "image",
+            "media_file_path": "media/proof.jpg",
+        }
+    ]
+
+    scores = media_rag._bailian_vl_rerank(
+        settings,
+        "T081 图片证据",
+        chunks,
+        index_dir=index_dir,
+        manifest={"source_staging_dir": str(staging_dir)},
+    )
+
+    assert calls
+    assert scores == {"image": 0.91}

@@ -46,9 +46,11 @@ def _mention_ids(mentions: object) -> tuple[str, ...]:
     for item in mentions:
         if not isinstance(item, dict):
             continue
-        mention_id = item.get("id")
-        if mention_id is None and isinstance(item.get("id"), dict):
-            mention_id = item["id"].get("open_id") or item["id"].get("union_id") or item["id"].get("user_id")
+        raw_id = item.get("id")
+        if isinstance(raw_id, dict):
+            mention_id = raw_id.get("open_id") or raw_id.get("union_id") or raw_id.get("user_id")
+        else:
+            mention_id = raw_id
         if mention_id is not None:
             ids.append(str(mention_id))
     return tuple(ids)

@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     support_agent_model_pro: str = "deepseek-v4-pro"
     support_agent_billing_mode: str = "API Usage Billing"
     support_agent_session_limit: int = 40
+    support_agent_session_db_path: str = "data/feishu_runtime/agent_sessions.sqlite3"
     support_agent_use_chat_completions: bool = True
 
     openai_tracing_api_key: str = ""

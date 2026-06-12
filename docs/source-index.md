@@ -4,7 +4,7 @@
 
 ## 主要设计笔记
 
-- Obsidian 总笔记：[obsidian-master-note.md](</Users/chenyu/Documents/workplace/agent_runtime(test)/docs/obsidian-master-note.md>)
+- Obsidian 总笔记：[obsidian-master-note.md](obsidian-master-note.md)
 - 作用：项目设计、架构和阶段决策的动态总笔记。该文件是软链接；如果 Obsidian 笔记改名或移动，只需要更新软链接目标，不要在文档中写死 Obsidian 绝对路径。
 
 ## 飞书资源
@@ -13,7 +13,7 @@
 
 - 名称：`售后问题 AI 闭环库`
 - URL：https://ulanzichina.feishu.cn/base/JDWwbG7rRaeoZksPe1TchVyWnif
-- 本地说明：[base-demo-reference.md](</Users/chenyu/Documents/workplace/agent_runtime(test)/docs/base-demo-reference.md>)
+- 本地说明：[base-demo-reference.md](base-demo-reference.md)
 - 作用：原始事件采集、原消息追溯、媒体归档和动作日志参考。
 - 最近采集：2026-05-26 运行 `data/feishu_ingest/20260526-014329`，采集目标售后群和鲁工 P2P 近 30 天消息，并把去重后的原始消息、事件候选、媒体记录和动作日志写入该 Base。
 - 图片归档文件夹：https://ulanzichina.feishu.cn/drive/folder/HRdOft9QHlXeCSdAh9hcSMXlnsc
@@ -31,15 +31,15 @@
 
 - 名称：`2026年品质团队跟进事项清单`
 - URL：https://ulanzichina.feishu.cn/base/EI20b8wd4af3NEsY3YHc6dsXnOh
-- 本地说明：[quality-followup-base.md](</Users/chenyu/Documents/workplace/agent_runtime(test)/docs/quality-followup-base.md>)
-- 相关聊天说明：[luz-chat-reference.md](</Users/chenyu/Documents/workplace/agent_runtime(test)/docs/luz-chat-reference.md>)
+- 本地说明：[quality-followup-base.md](quality-followup-base.md)
+- 相关聊天说明：[luz-chat-reference.md](luz-chat-reference.md)
 - 作用：已审核品质跟进分类体系和长期记录目标表。
 
 ### 售前参考表
 
 - 名称：`2026AI配置汇总表`
 - URL：https://ulanzichina.feishu.cn/wiki/YESIwpMshilwlikWx3scWeNtnRf
-- 本地说明：[presales-knowledge-reference.md](</Users/chenyu/Documents/workplace/agent_runtime(test)/docs/presales-knowledge-reference.md>)
+- 本地说明：[presales-knowledge-reference.md](presales-knowledge-reference.md)
 - 作用：仅作为售前补充资料。必须与售后诊断和处理决策隔离。
 
 ### 会议纪要
@@ -53,12 +53,12 @@
 ### OpenAI Traces
 
 - 仪表盘：https://platform.openai.com/logs?api=traces
-- 本地说明：[tracing.md](</Users/chenyu/Documents/workplace/agent_runtime(test)/docs/tracing.md>)
+- 本地说明：[tracing.md](tracing.md)
 - 作用：查看 OpenAI Agents SDK trace、运行分组和工具调用。
 
 ## 本地 MVP 数据
 
-- SKU 支持目录：[docs/sku-support-catalog.md](</Users/chenyu/Documents/workplace/agent_runtime(test)/docs/sku-support-catalog.md>)
+- SKU 支持目录：[sku-support-catalog.md](sku-support-catalog.md)
 - 当前生成的 SKU CSV：`data/sku_catalog/processed/2026-05-26/sku_support_catalog-2026-05-26.csv`
 - SKU 目录作用：为 Agent 提供 SKU/SPU/产品负责人识别，用于售后流转；不是故障排查或政策知识库。
 - 本地演示种子知识已经从运行时移除。正式知识库和历史案例必须来自经过审核的检索源，才能作为答案依据。

@@ -120,6 +120,31 @@ def test_negated_commitment_is_not_reported():
     assert not any(issue.code == "forbidden_commitment" for issue in issues)
 
 
+def test_forbidden_commitment_synonyms_are_reported():
+    cases = [
+        "建议给客户换新。",
+        "安排补发配件。",
+        "同意退款处理。",
+        "可走赔付方案。",
+    ]
+
+    for text in cases:
+        answer = VALID_EMPTY_EVIDENCE_ANSWER.replace("建议先收集信息并人工确认。", text)
+        issues = validate_answer_contract(answer)
+        assert any(issue.code == "forbidden_commitment" for issue in issues), text
+
+
+def test_negated_commitment_synonym_is_not_reported():
+    answer = VALID_EMPTY_EVIDENCE_ANSWER.replace(
+        "建议先收集信息并人工确认。",
+        "不建议给客户换新，不能安排补发配件。",
+    )
+
+    issues = validate_answer_contract(answer)
+
+    assert not any(issue.code == "forbidden_commitment" for issue in issues)
+
+
 def test_support_answer_renders_existing_customer_service_format():
     answer = SupportAnswer(
         issue_type="troubleshooting",

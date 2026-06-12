@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import signal
 from typing import Any
+
+from agents import custom_span
 
 from agent_runtime.feishu.admission import BotIdentity
 from agent_runtime.feishu.bridge import event_from_payload, process_message_event
@@ -23,7 +26,8 @@ async def handle_payload(
     semaphore: asyncio.Semaphore | None = None,
     bot_identity: BotIdentity | None = None,
 ) -> str:
-    event = event_from_payload(payload)
+    with custom_span("parse_event", {"event_id_hash": _payload_event_id_hash(payload)}):
+        event = event_from_payload(payload)
     if event is None:
         return "ignored"
     return await process_message_event(
@@ -46,6 +50,12 @@ async def _process_payload(
         logger.exception("Failed to process Feishu event.")
         return
     logger.info("Processed Feishu event: %s", status)
+
+
+def _payload_event_id_hash(payload: dict[str, Any]) -> str:
+    header = payload.get("header") if isinstance(payload.get("header"), dict) else {}
+    event_id = str(header.get("event_id") or payload.get("event_id") or "")
+    return hashlib.sha1(event_id.encode("utf-8")).hexdigest()[:12] if event_id else ""
 
 
 def _track_processing_task(

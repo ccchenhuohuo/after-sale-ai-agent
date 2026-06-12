@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import time
 
-from agents import Runner, SQLiteSession, custom_span, flush_traces
+from agents import Runner, SQLiteSession, custom_span, flush_traces, trace
 from agents.exceptions import OutputGuardrailTripwireTriggered
 from agents.memory import SessionSettings
 
@@ -60,6 +61,26 @@ def bot_identity_for_settings(settings: Settings) -> BotIdentity:
     return BotIdentity(app_id=settings.feishu_app_id, open_id=settings.feishu_bot_open_id, names=names)
 
 
+def _hash_id(value: str) -> str:
+    return hashlib.sha1(value.encode("utf-8")).hexdigest()[:12] if value else ""
+
+
+def _trace_group_id(event: FeishuMessageEvent) -> str:
+    return f"feishu:{_hash_id(event.chat_id)}:thread:{_hash_id(effective_thread_id(event))}"
+
+
+def _event_trace_data(event: FeishuMessageEvent) -> dict[str, object]:
+    thread_id = effective_thread_id(event)
+    return {
+        "entrypoint": "feishu",
+        "chat_id_hash": _hash_id(event.chat_id),
+        "thread_id_hash": _hash_id(thread_id),
+        "message_id_hash": _hash_id(event.message_id),
+        "event_id_hash": _hash_id(event.event_id),
+        "queue_key_hash": _hash_id(queue_key_for_event(event)),
+    }
+
+
 def should_handle_event(event: FeishuMessageEvent, settings: Settings) -> bool:
     return should_accept(event, settings, bot_identity_for_settings(settings)).accepted
 
@@ -76,6 +97,7 @@ async def run_support_agent_for_event(event: FeishuMessageEvent, settings: Setti
     agent = build_support_copilot(settings.support_agent_model)
     session = SQLiteSession(
         session_id_for_event(event),
+        db_path=settings.support_agent_session_db_path,
         session_settings=SessionSettings(limit=settings.support_agent_session_limit),
     )
     user_input = build_feishu_user_input(event, settings)
@@ -100,7 +122,7 @@ async def run_support_agent_for_event(event: FeishuMessageEvent, settings: Setti
                 session=session,
                 run_config=build_run_config(
                     settings,
-                    group_id=f"feishu:{event.chat_id}:thread:{thread_id}",
+                    group_id=f"feishu:{_hash_id(event.chat_id)}:thread:{_hash_id(thread_id)}",
                     metadata={
                         "source": "feishu-bot",
                         "entrypoint": "feishu",
@@ -145,37 +167,76 @@ async def process_message_event(
 ) -> str:
     settings = settings or get_settings()
     runtime_store = runtime_store or _runtime_store_for_settings(settings)
-    gate = should_accept(event, settings, bot_identity or bot_identity_for_settings(settings), runtime_store)
-    if not gate.accepted:
-        logger.info(
-            "Ignored Feishu event: status=%s message_id=%s chat_id=%s thread_id=%s root_id=%s sender_type=%s",
-            gate.status,
-            event.message_id,
-            event.chat_id,
-            event.thread_id,
-            event.root_id,
-            event.sender_type,
-        )
-        return gate.status
-    if not runtime_store.try_record_event(event):
-        return "duplicate"
-    queue_key = queue_key_for_event(event)
-    logger.info("Queued Feishu event: message_id=%s queue_key=%s", event.message_id, queue_key)
-    async with _QUEUE.lock_for_event(event):
-        logger.info("Processing Feishu event: message_id=%s queue_key=%s", event.message_id, queue_key)
-        if semaphore is None:
-            return await _process_message_event_unlocked(event, settings, runtime_store)
-        async with semaphore:
-            return await _process_message_event_unlocked(event, settings, runtime_store)
+    trace_data = _event_trace_data(event)
+    with trace(
+        settings.support_agent_trace_workflow_name,
+        group_id=_trace_group_id(event),
+        metadata={**trace_data, "source": "feishu-bridge", "loop_version": "v2"},
+        disabled=settings.support_agent_tracing_disabled,
+    ):
+        with custom_span("feishu_event", {**trace_data, "status": "received"}):
+            with custom_span("admission_gate", trace_data):
+                gate = should_accept(event, settings, bot_identity or bot_identity_for_settings(settings), runtime_store)
+            if not gate.accepted:
+                with custom_span("feishu_event_status", {**trace_data, "status": gate.status}):
+                    logger.info(
+                        "Ignored Feishu event: status=%s message_id_hash=%s chat_id_hash=%s thread_id_hash=%s root_id_hash=%s sender_type=%s",
+                        gate.status,
+                        _hash_id(event.message_id),
+                        _hash_id(event.chat_id),
+                        _hash_id(event.thread_id),
+                        _hash_id(event.root_id),
+                        event.sender_type,
+                    )
+                    return gate.status
+
+            with custom_span("dedup", trace_data):
+                claim = runtime_store.claim_event(event)
+            if not claim.should_process:
+                with custom_span("feishu_event_status", {**trace_data, "status": claim.status}):
+                    return claim.status
+
+            queue_key = queue_key_for_event(event)
+            logger.info(
+                "Queued Feishu event: message_id_hash=%s queue_key_hash=%s claim_status=%s",
+                _hash_id(event.message_id),
+                _hash_id(queue_key),
+                claim.status,
+            )
+            lock = _QUEUE.lock_for_event(event)
+            wait_started_at = time.perf_counter()
+            with custom_span("queue_wait", {**trace_data, "claim_status": claim.status}):
+                await lock.acquire()
+            queue_wait_ms = round((time.perf_counter() - wait_started_at) * 1000, 2)
+            try:
+                logger.info(
+                    "Processing Feishu event: message_id_hash=%s queue_key_hash=%s queue_wait_ms=%s",
+                    _hash_id(event.message_id),
+                    _hash_id(queue_key),
+                    queue_wait_ms,
+                )
+                with custom_span("queue_processing", {**trace_data, "queue_wait_ms": queue_wait_ms}):
+                    if semaphore is None:
+                        status = await _process_message_event_unlocked(event, settings, runtime_store, trace_data)
+                    else:
+                        async with semaphore:
+                            status = await _process_message_event_unlocked(event, settings, runtime_store, trace_data)
+                with custom_span("feishu_event_status", {**trace_data, "status": status}):
+                    return status
+            finally:
+                lock.release()
 
 
 async def _process_message_event_unlocked(
     event: FeishuMessageEvent,
     settings: Settings,
     runtime_store: RuntimeStore,
+    trace_data: dict[str, object] | None = None,
 ) -> str:
+    trace_data = trace_data or _event_trace_data(event)
     try:
-        answer = await run_support_agent_for_event(event, settings)
+        with custom_span("agent_run", trace_data):
+            answer = await run_support_agent_for_event(event, settings)
     except OutputGuardrailTripwireTriggered as exc:
         runtime_store.record_event_error("agent_guardrail", event, str(exc))
         answer = "AI 客服参考生成失败，请人工处理。\n错误：输出安全校验未通过。"
@@ -183,18 +244,31 @@ async def _process_message_event_unlocked(
         runtime_store.record_event_error("agent", event, str(exc))
         answer = "AI 客服参考生成失败，请人工处理。\n错误：" + str(exc)
     try:
-        reply_result = await reply_in_thread(event.message_id, answer, settings)
+        reply_started_at = time.perf_counter()
+        with custom_span("reply_in_thread", trace_data):
+            reply_result = await reply_in_thread(event.message_id, answer, settings)
     except Exception as exc:
         runtime_store.record_reply(event, "reply_failed", error=str(exc))
         runtime_store.record_event_error("reply", event, str(exc))
         logger.exception(
-            "Failed to reply to Feishu thread; skipping any top-level fallback. message_id=%s thread_id=%s root_id=%s",
-            event.message_id,
-            event.thread_id,
-            event.root_id,
+            "Failed to reply to Feishu thread; skipping any top-level fallback. message_id_hash=%s thread_id_hash=%s root_id_hash=%s",
+            _hash_id(event.message_id),
+            _hash_id(event.thread_id),
+            _hash_id(event.root_id),
         )
         return "reply_failed"
     reply_message_id = reply_result.reply_message_id if isinstance(reply_result, ReplyResult) else ""
+    reply_latency_ms = round((time.perf_counter() - reply_started_at) * 1000, 2)
+    with custom_span(
+        "reply_in_thread_result",
+        {
+            **trace_data,
+            "reply_status": "replied",
+            "reply_message_id_hash": _hash_id(reply_message_id),
+            "reply_latency_ms": reply_latency_ms,
+        },
+    ):
+        pass
     runtime_store.record_reply(event, "replied", reply_message_id=reply_message_id)
     return "replied"
 

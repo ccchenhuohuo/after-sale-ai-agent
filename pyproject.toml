@@ -6,13 +6,12 @@ build-backend = "setuptools.build_meta"
 name = "ulanzi-after-sell-copilot"
 version = "0.1.0"
 description = "ulanzi after-sell copilot MVP 运行时。"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
-  "eval-type-backport>=0.2.0; python_version < '3.10'",
   "httpx>=0.27",
   "numpy>=1.26",
-  "openai>=1.0",
-  "openai-agents",
+  "openai>=2.38,<3",
+  "openai-agents>=0.17,<0.18",
   "arize-phoenix-otel>=0.16.0",
   "openinference-instrumentation-openai-agents",
   "pydantic-settings>=2.0",

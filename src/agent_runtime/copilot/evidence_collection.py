@@ -15,6 +15,7 @@ from agent_runtime.copilot.evidence import (
     evidence_pack_trace_attributes,
     short_hash,
 )
+from agent_runtime.copilot.case_context import UnifiedCaseContext
 from agent_runtime.settings import Settings, get_settings
 from agent_runtime.tools.rag import search_history_evidence, search_media_evidence, search_official_kb_evidence
 from agent_runtime.tools.sku_catalog import resolve_sku_evidence
@@ -24,9 +25,9 @@ T = TypeVar("T")
 SKU_RE = re.compile(r"\b[A-Z]{1,4}\d{2,5}[A-Z0-9-]*\b")
 
 
-async def collect_support_evidence(raw_issue: str, settings: Settings | None = None) -> SupportEvidencePack:
+async def collect_support_evidence(raw_issue: str | UnifiedCaseContext, settings: Settings | None = None) -> SupportEvidencePack:
     settings = settings or get_settings()
-    normalized_issue = _normalize_issue(raw_issue)
+    normalized_issue = _normalize_issue(_issue_text(raw_issue))
     query_hash = short_hash(normalized_issue)
     with custom_span(
         "input_normalize",
@@ -119,6 +120,12 @@ def infer_issue_type(raw_issue: str) -> str:
     if any(term in text for term in product_usage_terms):
         return "product_usage"
     return "unknown"
+
+
+def _issue_text(raw_issue: str | UnifiedCaseContext) -> str:
+    if isinstance(raw_issue, UnifiedCaseContext):
+        return raw_issue.normalized_query
+    return raw_issue
 
 
 def _normalize_issue(raw_issue: str) -> str:

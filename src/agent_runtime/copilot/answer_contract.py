@@ -7,6 +7,7 @@ from typing import Literal
 from agents import GuardrailFunctionOutput, output_guardrail
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_runtime.copilot.case_context import DataSourceCoverage
 from agent_runtime.copilot.evidence import SupportEvidencePack
 
 
@@ -110,6 +111,14 @@ class SupportAnswer(BaseModel):
     follow_up_questions: list[str] = Field(description="需要继续追问的信息。")
     official_evidence: str = Field(description="正式依据说明；无命中时必须明确未查询到可信正式依据。")
     history_reference: str = Field(description="历史参考说明；未审核证据必须标注需人工确认。")
+    data_sources_used: list[str] = Field(default_factory=list, description="本轮已参考或命中的数据源名称。")
+    missing_data_sources: list[str] = Field(default_factory=list, description="本轮缺失、未接入或未命中的关键数据源。")
+    recommended_action: Literal["answer", "ask_clarification", "human_review"] = Field(
+        default="ask_clarification",
+        description="建议动作；开发测试阶段 human_review 只提示人工复核，不实际艾特。",
+    )
+    owner_candidate: str = Field(default="", description="建议负责人候选；没有时留空。")
+    mention_enabled: bool = Field(default=False, description="开发测试阶段固定为 false，不实际 @ 任何人。")
     ticket_draft: str = Field(description="工单草稿或不建议生成工单的理由。")
 
 
@@ -212,6 +221,9 @@ def render_feishu_reply(answer: SupportAnswer | dict) -> str:
         _intro_paragraph(answer),
         f"客服可以先这样回应客户：{_visible_text(answer.suggested_reply)}",
     ]
+    source_paragraph = _source_paragraph(answer)
+    if source_paragraph:
+        paragraphs.append(source_paragraph)
     action_paragraph = _action_paragraph(answer)
     if action_paragraph:
         paragraphs.append(action_paragraph)
@@ -276,9 +288,35 @@ def render_support_answer(answer: SupportAnswer | object) -> str:
             "历史参考：",
             answer.history_reference,
             "",
+            "已参考数据源：",
+            _bullet_lines(answer.data_sources_used),
+            "",
+            "缺失数据源：",
+            _bullet_lines(answer.missing_data_sources),
+            "",
+            "建议动作：",
+            _recommended_action_line(answer),
+            "",
             "工单草稿：",
             answer.ticket_draft,
         ]
+    )
+
+
+def apply_data_source_coverage(answer: SupportAnswer | dict, coverage: DataSourceCoverage) -> SupportAnswer:
+    answer = _coerce_support_answer(answer)
+    used = [item.source_name for item in coverage.items if item.status == "hit"]
+    missing = [item.source_name for item in coverage.items if item.status in {"missing", "not_configured"}]
+    return answer.model_copy(
+        update={
+            "data_sources_used": answer.data_sources_used or used,
+            "missing_data_sources": answer.missing_data_sources or missing,
+            "recommended_action": answer.recommended_action
+            if answer.recommended_action != "ask_clarification"
+            else coverage.recommended_action,
+            "owner_candidate": answer.owner_candidate or coverage.owner_candidate,
+            "mention_enabled": False,
+        }
     )
 
 
@@ -370,10 +408,42 @@ def _action_paragraph(answer: SupportAnswer) -> str:
     return "；".join(parts) + "。"
 
 
+def _source_paragraph(answer: SupportAnswer) -> str:
+    parts = []
+    used = [_visible_text(item).strip("。") for item in answer.data_sources_used[:3] if item.strip()]
+    missing = [_visible_text(item).strip("。") for item in answer.missing_data_sources[:3] if item.strip()]
+    if used:
+        parts.append("这次主要参考了" + "、".join(used))
+    if missing:
+        parts.append("暂缺" + "、".join(missing))
+    if answer.recommended_action == "human_review":
+        parts.append("建议人工复核后再形成明确处理口径")
+    elif answer.recommended_action == "ask_clarification":
+        parts.append("建议先补齐关键信息")
+    if not parts:
+        return ""
+    return "；".join(parts) + "。"
+
+
+def _recommended_action_line(answer: SupportAnswer) -> str:
+    labels = {
+        "answer": "可给出保守客服参考",
+        "ask_clarification": "先追问补充信息",
+        "human_review": "建议人工复核，不实际艾特负责人",
+    }
+    owner = f"；负责人候选：{answer.owner_candidate}" if answer.owner_candidate else ""
+    mention = "；mention_enabled=false" if not answer.mention_enabled else "；mention_enabled=true"
+    return f"{answer.recommended_action}（{labels[answer.recommended_action]}{owner}{mention}）"
+
+
 def _needs_cautious_visible_reply(answer: SupportAnswer) -> bool:
-    combined = f"{answer.confidence} {answer.confidence_reason} {answer.official_evidence} {answer.history_reference}"
+    combined = (
+        f"{answer.confidence} {answer.confidence_reason} {answer.official_evidence} "
+        f"{answer.history_reference} {answer.recommended_action}"
+    )
     return (
         answer.confidence == "低"
+        or answer.recommended_action in {"ask_clarification", "human_review"}
         or "未查询到可信正式依据" in combined
         or "未查询到可信历史参考" in combined
         or "未审核历史参考" in combined

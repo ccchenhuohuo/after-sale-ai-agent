@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     support_agent_session_limit: int = 40
     support_agent_session_db_path: str = "data/feishu_runtime/agent_sessions.sqlite3"
     support_agent_use_chat_completions: bool = True
+    support_intake_router_enabled: bool = False
+    support_intake_router_model: str = ""
+    support_context_assembler_enabled: bool = False
+    support_context_assembler_model: str = ""
+    support_ocr_provider: str = "disabled"
+    support_vector_index_namespace: str = "after_sales_v1"
+    support_vector_artifact_dir: str = "data/feishu_runtime/vector_artifacts"
 
     openai_tracing_api_key: str = ""
     openai_org_id: str = ""

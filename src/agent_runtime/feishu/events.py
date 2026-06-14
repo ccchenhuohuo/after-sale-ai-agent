@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -23,6 +23,7 @@ class FeishuMessageEvent:
     root_id: str = ""
     parent_id: str = ""
     create_time: str = ""
+    raw_content: object = field(default=None, compare=False)
 
 
 def _field(payload: dict[str, Any], *names: str) -> str:
@@ -81,6 +82,7 @@ def event_from_payload(payload: dict[str, Any]) -> FeishuMessageEvent | None:
             message_type=str(message.get("message_type") or ""),
             sender_id=str(sender_id.get("open_id") or event.get("sender_id") or ""),
             content=extract_text_content(message.get("content")),
+            raw_content=message.get("content"),
             sender_type=str(sender.get("sender_type") or ""),
             mention_names=_mention_names(mentions),
             mention_ids=_mention_ids(mentions),
@@ -101,6 +103,7 @@ def event_from_payload(payload: dict[str, Any]) -> FeishuMessageEvent | None:
         message_type=str(payload.get("message_type") or payload.get("msg_type") or ""),
         sender_id=str(payload.get("sender_id") or sender_id.get("open_id") or sender.get("id") or ""),
         content=extract_text_content(_content(payload)),
+        raw_content=_content(payload),
         sender_type=str(payload.get("sender_type") or sender.get("sender_type") or ""),
         mention_names=_mention_names(mentions),
         mention_ids=_mention_ids(mentions),

@@ -10,8 +10,9 @@
 flowchart TB
     cli["终端对话<br/>chatcopilot"]
     feishu["飞书话题群<br/>SDK WebSocket"] --> bridge["Feishu bridge<br/>admission / dedup / queue / reply ledger"]
-    cli --> evidence["support evidence collector<br/>SKU / 正式 KB / 历史 / 媒体"]
-    bridge --> evidence
+    cli --> intake["support case pipeline<br/>request / intake / ingestion / context"]
+    bridge --> intake
+    intake --> evidence["support evidence collector<br/>SKU / 正式 KB / 历史 / 媒体"]
     evidence --> agent["ulanzi after-sell copilot<br/>OpenAI Agents SDK"]
     bridge --> reply["SDK im.v1.message.areply<br/>reply_in_thread"]
     evidence --> sku["SKU 目录<br/>SKU / SPU / 负责人"]
@@ -34,7 +35,7 @@ flowchart TB
 - `search_sku_catalog` 使用 `data/sku_catalog/` 下的真实合并 SKU 目录。
 - 正式知识库工具当前返回明确的“未查询到可信正式依据”。
 - `search_issue_history` 已接入飞书 raw JSON 历史话题 RAG，但只作为未审核历史参考，不能作为正式依据、政策依据或客户承诺依据。
-- 当前 v2 loop 由 runtime 先调用 `collect_support_evidence()` 并发收集 SKU、正式依据、历史参考和媒体观察证据，再把结构化证据包交给 Agent 生成 `SupportAnswer`。
+- 当前 v2 loop 由 runtime 先构造 `SupportCaseRequest`，经过 intake route、ingestion artifact 和 `UnifiedCaseContext` 后，再调用 `collect_support_evidence()` 并发收集 SKU、正式依据、历史参考和媒体观察证据，最后把统一上下文、数据源覆盖和结构化证据包交给 Agent 生成 `SupportAnswer`。
 - Agent 最终输出经过 SDK output guardrail 和本地答案 contract 校验；终端保留中文 11 字段调试格式，飞书群可见回复会再渲染成面向客服同事的自然中文。
 - 答案不得编造正式文档、历史案例、链接、负责人、政策或技术结论。
 
@@ -85,6 +86,10 @@ python -m agent_runtime.feishu.long_connection
 SUPPORT_AGENT_MODEL_FLASH=deepseek-v4-flash
 SUPPORT_AGENT_MODEL_PRO=deepseek-v4-pro
 SUPPORT_AGENT_BILLING_MODE=API Usage Billing
+SUPPORT_INTAKE_ROUTER_ENABLED=false
+SUPPORT_CONTEXT_ASSEMBLER_ENABLED=false
+SUPPORT_OCR_PROVIDER=disabled
+SUPPORT_VECTOR_INDEX_NAMESPACE=after_sales_v1
 ```
 
 `LLM_API_KEY` 只用于实际模型调用，例如 DeepSeek 的 OpenAI-compatible endpoint。`OPENAI_TRACING_API_KEY` 只用于向 OpenAI Platform 导出 Agents SDK traces；当使用非 OpenAI 模型且开启 tracing 时，两者应分开配置。
@@ -143,7 +148,7 @@ Agent 内部结构化输出和终端调试输出必须按以下顺序保留字�
 ## 项目地图
 
 - `agent_mvp.py`：`ulanzi after-sell copilot` 的终端对话入口。
-- `src/agent_runtime/copilot/`：Agent prompt、结构化答案 contract、证据包模型和 evidence collector。
+- `src/agent_runtime/copilot/`：Agent prompt、结构化答案 contract、case/context schema、intake router、ingestion pipeline、context assembler、证据包模型和 evidence collector。
 - `src/agent_runtime/feishu/`：飞书 SDK 长连接、入站 gate、SQLite runtime store、per-thread queue 和线程内回复。
 - `src/agent_runtime/tools/sku_catalog.py`：合并 SKU 目录查询。
 - `src/agent_runtime/tools/rag.py`：正式知识库检索占位和混合证据打包入口，统一返回 SKU 精准匹配、文本历史参考和媒体观察证据。

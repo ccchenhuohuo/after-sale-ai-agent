@@ -9,6 +9,7 @@ from fastapi import HTTPException
 import agent_runtime.feishu.bridge as bridge
 from agent_runtime.copilot.answer_contract import FEISHU_VISIBLE_REPLY_FALLBACK, SupportAnswer
 from agent_runtime.feishu.admission import BotIdentity, should_accept
+from agent_runtime.feishu.adapter import build_support_case_request_from_event
 from agent_runtime.feishu.bridge import (
     FeishuMessageEvent,
     build_feishu_user_input,
@@ -165,6 +166,53 @@ def test_lark_oapi_nested_object_payload_normalizes_like_v2():
     assert event.sender_id == "ou_sender"
     assert event.mention_ids == ("cli_bot",)
     assert event.mention_names == ("飞书 CLI",)
+
+
+def test_feishu_adapter_converts_image_message_to_support_asset(tmp_path):
+    settings = settings_for_tmp(tmp_path)
+    event = FeishuMessageEvent(
+        event_id="evt_img",
+        chat_id="oc_target",
+        chat_type="group",
+        message_id="om_img",
+        message_type="image",
+        sender_id="ou_sender",
+        content="@飞书 CLI 看下这个截图",
+        mention_names=("飞书 CLI",),
+        thread_id="omt_thread",
+        raw_content='{"image_key":"img_v3_abc","file_name":"chat_screenshot.png"}',
+    )
+
+    request = build_support_case_request_from_event(event, settings)
+
+    assert request.user_text == "看下这个截图"
+    assert len(request.assets) == 1
+    assert request.assets[0].media_type == "image"
+    assert request.assets[0].file_key == "img_v3_abc"
+    assert request.assets[0].message_id == "om_img"
+
+
+def test_feishu_adapter_converts_video_message_to_support_asset(tmp_path):
+    settings = settings_for_tmp(tmp_path)
+    event = FeishuMessageEvent(
+        event_id="evt_video",
+        chat_id="oc_target",
+        chat_type="group",
+        message_id="om_video",
+        message_type="video",
+        sender_id="ou_sender",
+        content="@飞书 CLI 故障视频",
+        mention_names=("飞书 CLI",),
+        thread_id="omt_thread",
+        raw_content='{"file_key":"video_v3_abc","file_name":"fault_video.mp4"}',
+    )
+
+    request = build_support_case_request_from_event(event, settings)
+
+    assert request.user_text == "故障视频"
+    assert len(request.assets) == 1
+    assert request.assets[0].media_type == "video"
+    assert request.assets[0].file_key == "video_v3_abc"
 
 
 def test_should_handle_event_requires_target_group_and_trigger():

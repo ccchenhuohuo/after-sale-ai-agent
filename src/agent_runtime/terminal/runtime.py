@@ -1,9 +1,12 @@
 from agents import Agent, Runner, SQLiteSession, custom_span, flush_traces
 from agents.exceptions import OutputGuardrailTripwireTriggered
 
-from agent_runtime.copilot.answer_contract import render_support_answer, validate_answer_contract
+from agent_runtime.copilot.answer_contract import apply_data_source_coverage, render_support_answer, validate_answer_contract
+from agent_runtime.copilot.case_context import SupportCaseRequest
+from agent_runtime.copilot.context_assembly import build_data_source_coverage
 from agent_runtime.copilot.evidence import evidence_pack_trace_attributes, short_hash
 from agent_runtime.copilot.evidence_collection import collect_support_evidence
+from agent_runtime.copilot.pipeline import build_support_case_context
 from agent_runtime.copilot.prompts import build_agent_input
 from agent_runtime.llm import build_run_config
 from agent_runtime.terminal.session import session_items_to_text
@@ -72,10 +75,24 @@ async def run_turn(agent, settings, session: SQLiteSession, user_input: str) -> 
                 "raw_issue_hash": short_hash(user_input),
             },
         ):
-            evidence_pack = await collect_support_evidence(user_input, settings)
+            request = SupportCaseRequest(
+                request_id=f"terminal:{short_hash(user_input)}",
+                source="terminal",
+                user_text=user_input,
+                trace_group_id="terminal-chat",
+            )
+            case_result = await build_support_case_context(request, settings)
+            evidence_pack = await collect_support_evidence(case_result.context.normalized_query, settings)
+            coverage = build_data_source_coverage(case_result.context, evidence_pack)
             result = await Runner.run(
                 agent,
-                build_agent_input(user_input, source="本地终端", evidence_pack=evidence_pack),
+                build_agent_input(
+                    user_input,
+                    source="本地终端",
+                    evidence_pack=evidence_pack,
+                    case_context=case_result.context,
+                    coverage=coverage,
+                ),
                 context=evidence_pack,
                 session=session,
                 run_config=build_run_config(
@@ -91,7 +108,8 @@ async def run_turn(agent, settings, session: SQLiteSession, user_input: str) -> 
                     },
                 ),
             )
-            final_output = render_support_answer(result.final_output)
+            final_answer = apply_data_source_coverage(result.final_output, coverage)
+            final_output = render_support_answer(final_answer)
             with custom_span(
                 "answer_contract_check",
                 {

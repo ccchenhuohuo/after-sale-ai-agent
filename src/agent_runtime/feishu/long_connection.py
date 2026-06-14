@@ -208,7 +208,7 @@ def _backfill_payload_admission(
         return PayloadAdmission(False, "skipped_no_trigger", event)
     if event.sender_type != "user" or _is_self_echo_or_bot_sender(event, bot_identity):
         return PayloadAdmission(False, "skipped_app_or_bot", event)
-    if event.message_type != "text":
+    if event.message_type not in {"text", "post", "image", "video", "file", "audio"}:
         return PayloadAdmission(False, "skipped_non_text", event)
     allowed_chat_ids = split_csv(settings.feishu_support_group_chat_id)
     if allowed_chat_ids and event.chat_id not in allowed_chat_ids:

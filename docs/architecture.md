@@ -12,8 +12,13 @@
 
 ```mermaid
 flowchart TB
-    terminal["终端对话<br/>chatcopilot / agent_mvp.py"] --> evidence["support evidence collector"]
-    feishu["飞书话题群<br/>SDK 长连接"] --> evidence
+    terminal["终端对话<br/>chatcopilot / agent_mvp.py"] --> request["SupportCaseRequest"]
+    feishu["飞书话题群<br/>SDK 长连接"] --> adapter["Feishu Adapter<br/>text / asset metadata"]
+    adapter --> request
+    request --> intake["Intake Router<br/>RouteDecision"]
+    intake --> ingestion["Ingestion Layer<br/>text / OCR / visual refs / video sampling"]
+    ingestion --> context["UnifiedCaseContext<br/>normalized query / vector refs"]
+    context --> evidence["support evidence collector"]
     evidence --> runtime["OpenAI Agents SDK<br/>Runner.run"]
     runtime --> copilot["ulanzi after-sell copilot<br/>Pydantic SupportAnswer"]
 
@@ -37,7 +42,8 @@ flowchart TB
 - 当前测试阶段只启用终端对话入口。
 - Web Demo、HTTP API 和 webhook 运行时已经移除。
 - OpenAI Agents SDK 是结构化答案生成、session、tracing 和 output guardrail 层。
-- SKU、正式 KB、历史和媒体检索由 runtime 的 `collect_support_evidence()` 并发编排，再把结构化证据包传给 Agent。
+- 终端和飞书入口先统一为 `SupportCaseRequest`，再经过 intake route、ingestion artifact 和 `UnifiedCaseContext`；SKU、正式 KB、历史和媒体检索由 runtime 的 `collect_support_evidence()` 基于归一化 query 并发编排，再把统一上下文、数据源覆盖和结构化证据包传给 Agent。
+- Feishu Bridge 保留 admission、dedup、per-thread queue、reply ledger 和 thread reply；飞书 SDK 细节被限制在 adapter/bridge 层，核心售后 pipeline 不直接依赖飞书 SDK。
 - 旧的本地确定性分析器和本地演示知识已经移除。
 - 合并后的 SKU 支持目录只用于产品识别和负责人流转，不作为故障依据。
 - 正式文档和历史参考必须分开。

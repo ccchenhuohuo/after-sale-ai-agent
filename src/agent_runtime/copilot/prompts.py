@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from agent_runtime.copilot.case_context import DataSourceCoverage, UnifiedCaseContext
+from agent_runtime.copilot.context_assembly import render_case_context_for_prompt
 from agent_runtime.copilot.evidence import SupportEvidencePack, render_evidence_pack
 
 
@@ -44,16 +46,34 @@ SUPPORT_COPILOT_INSTRUCTIONS = """
 - follow_up_questions：需要追问的问题列表
 - official_evidence：正式依据；无正式命中时必须写“未查询到可信正式依据”
 - history_reference：历史参考；未审核历史/媒体证据必须标注“未审核、需人工确认、不能作为正式依据”
+- data_sources_used：本轮已参考或命中的数据源名称列表
+- missing_data_sources：本轮缺失、未接入或未命中的关键数据源名称列表
+- recommended_action：answer / ask_clarification / human_review
+- owner_candidate：如 SKU 目录可识别负责人，可填候选负责人；否则留空
+- mention_enabled：开发测试阶段固定为 false，不要实际 @ 任何人
 - ticket_draft：需要工单时写标题、问题描述、缺失信息、建议负责人、优先级、下一步；不需要时写不建议生成工单及原因
 """
 
 
-def build_agent_input(raw_issue: str, source: str = "飞书客服群", evidence_pack: SupportEvidencePack | None = None) -> str:
+def build_agent_input(
+    raw_issue: str,
+    source: str = "飞书客服群",
+    evidence_pack: SupportEvidencePack | None = None,
+    case_context: UnifiedCaseContext | None = None,
+    coverage: DataSourceCoverage | None = None,
+) -> str:
     evidence_text = render_evidence_pack(evidence_pack) if evidence_pack is not None else "结构化证据包：未提供。"
+    context_text = (
+        render_case_context_for_prompt(case_context, coverage)
+        if case_context is not None
+        else "统一售后上下文：未提供，按原始客户问题分析。"
+    )
     return f"""客户问题：
 {raw_issue.strip()}
 
 上下文：
 来自{source}，当前结果只供内部客服参考。
+
+{context_text}
 
 {evidence_text}"""

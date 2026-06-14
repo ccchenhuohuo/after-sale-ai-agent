@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import re
 import time
 
 from agents import Runner, SQLiteSession, custom_span, flush_traces, trace
@@ -15,15 +14,19 @@ from openai import AsyncOpenAI, BadRequestError
 from agent_runtime.copilot.answer_contract import (
     FEISHU_VISIBLE_REPLY_FALLBACK,
     SupportAnswer,
+    apply_data_source_coverage,
     render_feishu_reply,
     render_support_answer,
     validate_answer_contract,
     validate_feishu_visible_reply,
 )
+from agent_runtime.copilot.context_assembly import build_data_source_coverage
 from agent_runtime.copilot.evidence import SupportEvidencePack
 from agent_runtime.copilot.evidence import evidence_pack_trace_attributes, short_hash
 from agent_runtime.copilot.evidence_collection import collect_support_evidence
+from agent_runtime.copilot.pipeline import build_support_case_context
 from agent_runtime.copilot.prompts import build_agent_input
+from agent_runtime.feishu.adapter import build_feishu_user_text, build_support_case_request_from_event
 from agent_runtime.copilot.support_copilot import build_support_copilot
 from agent_runtime.feishu.admission import BotIdentity, should_accept
 from agent_runtime.feishu.events import (
@@ -33,7 +36,6 @@ from agent_runtime.feishu.events import (
     queue_key_for_event,
     session_id_for_event,
 )
-from agent_runtime.feishu.parser import strip_trigger_prefix
 from agent_runtime.feishu.queues import PerThreadQueue
 from agent_runtime.feishu.responder import FeishuSdkResponder, ReplyResult
 from agent_runtime.feishu.runtime_store import RuntimeStore
@@ -97,15 +99,7 @@ def should_handle_event(event: FeishuMessageEvent, settings: Settings) -> bool:
 
 
 def build_feishu_user_input(event: FeishuMessageEvent, settings: Settings) -> str:
-    text = event.content.strip()
-    if settings.feishu_bot_mention_name:
-        text = text.replace(f"@{settings.feishu_bot_mention_name}", "").replace(settings.feishu_bot_mention_name, "")
-    for mention_name in event.mention_names:
-        if mention_name:
-            text = text.replace(f"@{mention_name}", "").replace(mention_name, "")
-    text = re.sub(r"@_user_\d+", "", text)
-    text = strip_trigger_prefix(text, settings.support_agent_trigger_prefix)
-    return text.strip() or event.content.strip()
+    return build_feishu_user_text(event, settings)
 
 
 async def run_support_agent_for_event(event: FeishuMessageEvent, settings: Settings | None = None) -> str:
@@ -116,7 +110,8 @@ async def run_support_agent_for_event(event: FeishuMessageEvent, settings: Setti
         db_path=settings.support_agent_session_db_path,
         session_settings=SessionSettings(limit=settings.support_agent_session_limit),
     )
-    user_input = build_feishu_user_input(event, settings)
+    request = build_support_case_request_from_event(event, settings)
+    user_input = request.user_text
     thread_id = effective_thread_id(event)
     with custom_span(
         "support_turn",
@@ -129,8 +124,16 @@ async def run_support_agent_for_event(event: FeishuMessageEvent, settings: Setti
             "message_id_hash": hashlib.sha1(event.message_id.encode("utf-8")).hexdigest()[:12],
         },
     ):
-        evidence_pack = await collect_support_evidence(user_input, settings)
-        agent_input = build_agent_input(user_input, source="飞书客服话题群", evidence_pack=evidence_pack)
+        case_result = await build_support_case_context(request, settings)
+        evidence_pack = await collect_support_evidence(case_result.context.normalized_query, settings)
+        coverage = build_data_source_coverage(case_result.context, evidence_pack)
+        agent_input = build_agent_input(
+            user_input,
+            source="飞书客服话题群",
+            evidence_pack=evidence_pack,
+            case_context=case_result.context,
+            coverage=coverage,
+        )
         try:
             result = await Runner.run(
                 agent,
@@ -152,7 +155,7 @@ async def run_support_agent_for_event(event: FeishuMessageEvent, settings: Setti
                     },
                 ),
             )
-            final_answer = result.final_output
+            final_answer = apply_data_source_coverage(result.final_output, coverage)
         except BadRequestError as exc:
             if not _is_response_format_unavailable(exc):
                 raise
@@ -160,7 +163,10 @@ async def run_support_agent_for_event(event: FeishuMessageEvent, settings: Setti
                 "Agent structured output response_format unavailable; using DeepSeek JSON fallback. message_id_hash=%s",
                 _hash_id(event.message_id),
             )
-            final_answer = await _run_support_answer_json_fallback(settings, agent_input, evidence_pack)
+            final_answer = apply_data_source_coverage(
+                await _run_support_answer_json_fallback(settings, agent_input, evidence_pack),
+                coverage,
+            )
         finally:
             flush_traces()
         output = render_support_answer(final_answer)

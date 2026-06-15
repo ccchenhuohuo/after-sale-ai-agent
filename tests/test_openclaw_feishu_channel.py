@@ -243,6 +243,32 @@ def test_openclaw_webhook_secret_is_checked_before_runtime_configuration(monkeyp
     assert configured is False
 
 
+def test_openclaw_health_reports_channel_without_runtime_configuration(monkeypatch):
+    configured = False
+
+    def fake_configure(settings):
+        nonlocal configured
+        configured = True
+        return settings
+
+    monkeypatch.setattr(
+        openclaw_webhook,
+        "get_settings",
+        lambda: Settings(openclaw_feishu_bridge_secret="secret"),
+    )
+    monkeypatch.setattr(openclaw_webhook, "configure_agents_runtime", fake_configure)
+
+    health = asyncio.run(openclaw_webhook.openclaw_feishu_health())
+
+    assert health == {
+        "ok": True,
+        "channel": "openclaw_feishu",
+        "runtime": "support_copilot",
+        "requiresSecret": True,
+    }
+    assert configured is False
+
+
 def test_openclaw_webhook_returns_thread_reply_payload(monkeypatch):
     captured = {}
 

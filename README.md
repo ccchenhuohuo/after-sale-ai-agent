@@ -10,11 +10,16 @@
 flowchart TB
     cli["终端对话<br/>chatcopilot"]
     feishu["飞书话题群<br/>SDK WebSocket"] --> bridge["Feishu bridge<br/>admission / dedup / queue / reply ledger"]
-    cli --> intake["support case pipeline<br/>request / intake / ingestion / context"]
+    openclaw["OpenClaw Lark/Feishu sidecar"] --> openclaw_channel["openclaw_feishu channel<br/>HTTP compatibility endpoint"]
+    future_im["未来 IM 平台"] --> channel["Channel Adapter<br/>event/message/assets -> SupportCaseRequest"]
+    cli --> intake["Core Support Runtime<br/>SupportCaseRequest -> SupportRuntimeResult"]
     bridge --> intake
+    openclaw_channel --> intake
+    channel --> intake
     intake --> evidence["support evidence collector<br/>SKU / 正式 KB / 历史 / 媒体"]
     evidence --> agent["ulanzi after-sell copilot<br/>OpenAI Agents SDK"]
     bridge --> reply["SDK im.v1.message.areply<br/>reply_in_thread"]
+    openclaw_channel --> openclaw_reply["OpenClaw thread reply payload"]
     evidence --> sku["SKU 目录<br/>SKU / SPU / 负责人"]
     evidence --> official["正式知识库<br/>尚未接入"]
     evidence --> history["历史话题 RAG<br/>未审核历史参考"]
@@ -24,13 +29,16 @@ flowchart TB
 
 运行规则：
 
-- 终端和飞书 SDK 长连接是当前启用的交互入口。
-- 飞书链路只使用官方 Python SDK，不依赖额外命令行桥接工具。
+- 终端和 legacy 飞书 SDK 长连接是当前稳定交互入口。
+- OpenClaw Feishu sidecar path 已提供 compatibility endpoint 和 contract smoke，用于下一阶段替代 legacy 飞书通道；真实飞书群 E2E 需要凭证环境验证。
+- Core Support Runtime 只消费 `SupportCaseRequest` 并输出 `SupportRuntimeResult`，不 import 飞书 SDK、OpenClaw 或 channel 模块。
+- 新 IM 平台通过独立 `channels/<platform>/adapter.py` / `responder.py` 接入同一个 Core Runtime，不复制 Agent 编排。
+- Legacy 飞书链路只使用官方 Python SDK，不依赖额外命令行桥接工具。
 - 飞书事件只处理白名单话题群内真实用户 @ 机器人后的文本消息。
 - 飞书回复强制使用 `im.v1.message.areply` 的 `reply_in_thread=true`，不会 fallback 到主群新消息。
 - 启动面板展示项目名称、版本、当前模型、计费模式和项目路径。
 - 输入状态只保留上下文数量和当前模型。
-- Web Demo 和 HTTP API 不作为当前运行入口；生产飞书链路不使用公网 webhook。
+- 旧 Web Demo 和通用公开 HTTP API 不作为当前运行入口；保留的 HTTP 面只用于受控 channel compatibility endpoint。legacy 飞书生产链路仍不使用公网 webhook。
 - 旧的本地确定性匹配分析器和演示种子知识已经从运行时移除。
 - `search_sku_catalog` 使用 `data/sku_catalog/` 下的真实合并 SKU 目录。
 - 正式知识库工具当前返回明确的“未查询到可信正式依据”。
@@ -65,6 +73,18 @@ feishu-long-connection
 ```bash
 python -m agent_runtime.feishu.long_connection
 ```
+
+OpenClaw Feishu sidecar compatibility endpoint 随 FastAPI app 暴露：
+
+```bash
+uvicorn agent_runtime.feishu.webhook:app --host 127.0.0.1 --port 8000
+curl -s http://127.0.0.1:8000/channels/openclaw-feishu/health
+cd deploy/openclaw_sidecar
+nvm use 22.22.2
+corepack npm run smoke:support-copilot
+```
+
+sidecar 环境样例和真实飞书群验收清单位于 `deploy/openclaw_sidecar/`。OpenClaw path 稳定前，legacy `feishu-long-connection` 保留为 fallback。
 
 开发时也可以继续使用 `make chat`，它底层同样运行 `agent_mvp.py`。
 

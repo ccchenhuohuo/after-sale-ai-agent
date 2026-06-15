@@ -18,6 +18,17 @@ from agent_runtime.settings import Settings, get_settings
 router = APIRouter(prefix="/channels/openclaw-feishu", tags=["openclaw-feishu"])
 
 
+@router.get("/health")
+async def openclaw_feishu_health() -> dict[str, Any]:
+    settings = get_settings()
+    return {
+        "ok": True,
+        "channel": "openclaw_feishu",
+        "runtime": "support_copilot",
+        "requiresSecret": bool(settings.openclaw_feishu_bridge_secret),
+    }
+
+
 @router.post("/support-case")
 async def openclaw_feishu_support_case(
     payload: dict[str, Any],

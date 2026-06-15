@@ -44,6 +44,12 @@ Run the Python API first, for example:
 uvicorn agent_runtime.feishu.webhook:app --host 127.0.0.1 --port 8000
 ```
 
+Confirm the channel endpoint is reachable without invoking the Agent:
+
+```bash
+curl -s http://127.0.0.1:8000/channels/openclaw-feishu/health
+```
+
 Then run the local OpenClaw-shaped contract smoke:
 
 ```bash
@@ -60,3 +66,6 @@ The smoke payload includes a two-message burst with text plus an image resource
 whose download is marked as failed. A successful response must be a Feishu
 thread reply payload with `mode=thread_reply`, `replyInThread=true`, and a
 readable fallback text.
+
+Use `support-copilot.env.example` for sidecar environment wiring and
+`live-e2e-checklist.md` for the real Feishu group validation gate.

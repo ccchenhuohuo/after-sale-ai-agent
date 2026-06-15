@@ -384,7 +384,7 @@ def test_openclaw_health_reports_channel_without_runtime_configuration(monkeypat
 
 
 def test_openclaw_health_reports_required_unconfigured_secret_by_default(monkeypatch):
-    monkeypatch.setattr(openclaw_webhook, "get_settings", lambda: Settings())
+    monkeypatch.setattr(openclaw_webhook, "get_settings", lambda: Settings(openclaw_feishu_bridge_secret=""))
 
     health = asyncio.run(openclaw_webhook.openclaw_feishu_health())
 
@@ -398,7 +398,7 @@ def test_openclaw_health_reports_required_unconfigured_secret_by_default(monkeyp
 
 
 def test_openclaw_webhook_rejects_when_secret_required_but_unconfigured(monkeypatch):
-    monkeypatch.setattr(openclaw_webhook, "get_settings", lambda: Settings())
+    monkeypatch.setattr(openclaw_webhook, "get_settings", lambda: Settings(openclaw_feishu_bridge_secret=""))
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(openclaw_webhook.openclaw_feishu_support_case({"messageId": "om_msg", "content": "ping"}))
@@ -463,7 +463,11 @@ def test_openclaw_webhook_contract_only_smoke_does_not_configure_runtime(monkeyp
         configured = True
         raise AssertionError("contractOnly smoke must not configure the LLM runtime")
 
-    monkeypatch.setattr(openclaw_webhook, "get_settings", lambda: Settings(openclaw_feishu_require_secret=False))
+    monkeypatch.setattr(
+        openclaw_webhook,
+        "get_settings",
+        lambda: Settings(openclaw_feishu_bridge_secret="", openclaw_feishu_require_secret=False),
+    )
     monkeypatch.setattr(openclaw_webhook, "configure_agents_runtime", fake_configure)
 
     reply = asyncio.run(

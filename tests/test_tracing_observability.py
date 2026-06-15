@@ -328,7 +328,11 @@ def test_openclaw_contract_only_does_not_create_runtime_trace(monkeypatch):
         runtime_traces.append(attrs)
         yield
 
-    monkeypatch.setattr(openclaw_webhook, "get_settings", lambda: Settings(openclaw_feishu_require_secret=False))
+    monkeypatch.setattr(
+        openclaw_webhook,
+        "get_settings",
+        lambda: Settings(openclaw_feishu_bridge_secret="", openclaw_feishu_require_secret=False),
+    )
     monkeypatch.setattr(openclaw_webhook, "runtime_trace", fake_runtime_trace)
     monkeypatch.setattr(openclaw_webhook, "flush_traces", lambda: flushes.append("flush"))
     monkeypatch.setattr(obs_tracing, "get_current_trace", lambda: None)

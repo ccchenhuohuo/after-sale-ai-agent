@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+import agent_runtime.copilot.runtime as support_runtime
 import agent_runtime.feishu.bridge as bridge
 from agent_runtime.copilot.answer_contract import FEISHU_VISIBLE_REPLY_FALLBACK, SupportAnswer
 from agent_runtime.feishu.admission import BotIdentity, should_accept
@@ -930,7 +931,7 @@ def test_feishu_agent_session_uses_persistent_db(monkeypatch, tmp_path):
     observed_lengths = []
 
     monkeypatch.setattr(bridge, "configure_agents_runtime", lambda settings: settings)
-    monkeypatch.setattr(bridge, "build_support_copilot", lambda model: object())
+    monkeypatch.setattr(support_runtime, "build_support_copilot", lambda model: object())
 
     async def fake_collect(raw_issue, settings):
         from agent_runtime.copilot.evidence import SupportEvidencePack
@@ -966,8 +967,8 @@ def test_feishu_agent_session_uses_persistent_db(monkeypatch, tmp_path):
             )
         )
 
-    monkeypatch.setattr(bridge, "collect_support_evidence", fake_collect)
-    monkeypatch.setattr(bridge.Runner, "run", fake_run)
+    monkeypatch.setattr(support_runtime, "collect_support_evidence", fake_collect)
+    monkeypatch.setattr(support_runtime.Runner, "run", fake_run)
     event = FeishuMessageEvent(
         event_id="evt_1",
         chat_id="oc_target",
@@ -992,7 +993,7 @@ def test_feishu_agent_returns_visible_natural_reply(monkeypatch, tmp_path):
     settings = settings_for_tmp(tmp_path, llm_api_key="test-key")
 
     monkeypatch.setattr(bridge, "configure_agents_runtime", lambda settings: settings)
-    monkeypatch.setattr(bridge, "build_support_copilot", lambda model: object())
+    monkeypatch.setattr(support_runtime, "build_support_copilot", lambda model: object())
 
     async def fake_collect(raw_issue, settings):
         from agent_runtime.copilot.evidence import SupportEvidencePack
@@ -1026,8 +1027,8 @@ def test_feishu_agent_returns_visible_natural_reply(monkeypatch, tmp_path):
             )
         )
 
-    monkeypatch.setattr(bridge, "collect_support_evidence", fake_collect)
-    monkeypatch.setattr(bridge.Runner, "run", fake_run)
+    monkeypatch.setattr(support_runtime, "collect_support_evidence", fake_collect)
+    monkeypatch.setattr(support_runtime.Runner, "run", fake_run)
     event = FeishuMessageEvent(
         event_id="evt_1",
         chat_id="oc_target",
@@ -1053,7 +1054,7 @@ def test_feishu_agent_visible_validation_uses_safe_fallback(monkeypatch, tmp_pat
     settings = settings_for_tmp(tmp_path, llm_api_key="test-key")
 
     monkeypatch.setattr(bridge, "configure_agents_runtime", lambda settings: settings)
-    monkeypatch.setattr(bridge, "build_support_copilot", lambda model: object())
+    monkeypatch.setattr(support_runtime, "build_support_copilot", lambda model: object())
 
     async def fake_collect(raw_issue, settings):
         from agent_runtime.copilot.evidence import SupportEvidencePack
@@ -1087,8 +1088,8 @@ def test_feishu_agent_visible_validation_uses_safe_fallback(monkeypatch, tmp_pat
             )
         )
 
-    monkeypatch.setattr(bridge, "collect_support_evidence", fake_collect)
-    monkeypatch.setattr(bridge.Runner, "run", fake_run)
+    monkeypatch.setattr(support_runtime, "collect_support_evidence", fake_collect)
+    monkeypatch.setattr(support_runtime.Runner, "run", fake_run)
     event = FeishuMessageEvent(
         event_id="evt_1",
         chat_id="oc_target",

@@ -2,32 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
 import time
 
-from agents import Runner, SQLiteSession, custom_span, flush_traces, trace
+from agents import custom_span, trace
 from agents.exceptions import OutputGuardrailTripwireTriggered
-from agents.memory import SessionSettings
-from openai import AsyncOpenAI, BadRequestError
 
-from agent_runtime.copilot.answer_contract import (
-    FEISHU_VISIBLE_REPLY_FALLBACK,
-    SupportAnswer,
-    apply_data_source_coverage,
-    render_feishu_reply,
-    render_support_answer,
-    validate_answer_contract,
-    validate_feishu_visible_reply,
-)
-from agent_runtime.copilot.context_assembly import build_data_source_coverage
-from agent_runtime.copilot.evidence import SupportEvidencePack
-from agent_runtime.copilot.evidence import evidence_pack_trace_attributes, short_hash
-from agent_runtime.copilot.evidence_collection import collect_support_evidence
-from agent_runtime.copilot.pipeline import build_support_case_context
-from agent_runtime.copilot.prompts import build_agent_input
+from agent_runtime.copilot.answer_contract import FEISHU_VISIBLE_REPLY_FALLBACK
+from agent_runtime.copilot.runtime import build_support_runtime_session, run_support_case_request
 from agent_runtime.feishu.adapter import build_feishu_user_text, build_support_case_request_from_event
-from agent_runtime.copilot.support_copilot import build_support_copilot
 from agent_runtime.feishu.admission import BotIdentity, should_accept
 from agent_runtime.feishu.events import (
     FeishuMessageEvent,
@@ -39,10 +22,8 @@ from agent_runtime.feishu.events import (
 from agent_runtime.feishu.queues import PerThreadQueue
 from agent_runtime.feishu.responder import FeishuSdkResponder, ReplyResult
 from agent_runtime.feishu.runtime_store import RuntimeStore
-from agent_runtime.llm import build_run_config, configure_agents_runtime
+from agent_runtime.llm import configure_agents_runtime
 from agent_runtime.settings import Settings, get_settings
-from agent_runtime.tools.history_rag import history_rag_index_available
-from agent_runtime.tools.media_rag import media_rag_index_available
 
 
 logger = logging.getLogger(__name__)
@@ -104,160 +85,33 @@ def build_feishu_user_input(event: FeishuMessageEvent, settings: Settings) -> st
 
 async def run_support_agent_for_event(event: FeishuMessageEvent, settings: Settings | None = None) -> str:
     settings = configure_agents_runtime(settings or get_settings())
-    agent = build_support_copilot(settings.support_agent_model)
-    session = SQLiteSession(
-        session_id_for_event(event),
-        db_path=settings.support_agent_session_db_path,
-        session_settings=SessionSettings(limit=settings.support_agent_session_limit),
-    )
     request = build_support_case_request_from_event(event, settings)
-    user_input = request.user_text
     thread_id = effective_thread_id(event)
-    with custom_span(
-        "support_turn",
-        {
-            "entrypoint": "feishu",
-            "loop_version": "v2",
-            "raw_issue_hash": short_hash(user_input),
-            "chat_id_hash": hashlib.sha1(event.chat_id.encode("utf-8")).hexdigest()[:12],
-            "thread_id_hash": hashlib.sha1(thread_id.encode("utf-8")).hexdigest()[:12],
-            "message_id_hash": hashlib.sha1(event.message_id.encode("utf-8")).hexdigest()[:12],
+    session = build_support_runtime_session(settings, session_id_for_event(event))
+    runtime_result = await run_support_case_request(
+        request,
+        settings,
+        entrypoint="feishu",
+        source_label="飞书客服话题群",
+        session=session,
+        run_config_group_id=f"feishu:{_hash_id(event.chat_id)}:thread:{_hash_id(thread_id)}",
+        run_config_metadata={
+            "source": "feishu-bot",
+            "chat_id_hash": _hash_id(event.chat_id),
+            "thread_id_hash": _hash_id(thread_id),
+            "message_id_hash": _hash_id(event.message_id),
         },
-    ):
-        case_result = await build_support_case_context(request, settings)
-        evidence_pack = await collect_support_evidence(case_result.context.normalized_query, settings)
-        coverage = build_data_source_coverage(case_result.context, evidence_pack)
-        agent_input = build_agent_input(
-            user_input,
-            source="飞书客服话题群",
-            evidence_pack=evidence_pack,
-            case_context=case_result.context,
-            coverage=coverage,
-        )
-        try:
-            result = await Runner.run(
-                agent,
-                agent_input,
-                context=evidence_pack,
-                session=session,
-                run_config=build_run_config(
-                    settings,
-                    group_id=f"feishu:{_hash_id(event.chat_id)}:thread:{_hash_id(thread_id)}",
-                    metadata={
-                        "source": "feishu-bot",
-                        "entrypoint": "feishu",
-                        "loop_version": "v2",
-                        "chat_id_hash": hashlib.sha1(event.chat_id.encode("utf-8")).hexdigest()[:12],
-                        "thread_id_hash": hashlib.sha1(thread_id.encode("utf-8")).hexdigest()[:12],
-                        "message_id_hash": hashlib.sha1(event.message_id.encode("utf-8")).hexdigest()[:12],
-                        "history_index_available": history_rag_index_available(settings),
-                        "media_index_available": media_rag_index_available(settings),
-                    },
-                ),
-            )
-            final_answer = apply_data_source_coverage(result.final_output, coverage)
-        except BadRequestError as exc:
-            if not _is_response_format_unavailable(exc):
-                raise
-            logger.warning(
-                "Agent structured output response_format unavailable; using DeepSeek JSON fallback. message_id_hash=%s",
-                _hash_id(event.message_id),
-            )
-            final_answer = apply_data_source_coverage(
-                await _run_support_answer_json_fallback(settings, agent_input, evidence_pack),
-                coverage,
-            )
-        finally:
-            flush_traces()
-        output = render_support_answer(final_answer)
-        with custom_span(
-            "answer_contract_check",
-            {
-                **evidence_pack_trace_attributes(evidence_pack),
-                "entrypoint": "feishu",
-            },
-        ):
-            issues = validate_answer_contract(output, history_connected=history_rag_index_available(settings))
-        visible_output = render_feishu_reply(final_answer)
-        visible_issues = validate_feishu_visible_reply(visible_output)
-        with custom_span(
-            "feishu_visible_reply_check",
-            {
-                "entrypoint": "feishu",
-                "internal_issue_codes": [issue.code for issue in issues],
-                "visible_issue_codes": [issue.code for issue in visible_issues],
-            },
-        ):
-            pass
-        flush_traces()
-    if issues or visible_issues:
+        render_visible_reply=True,
+    )
+    if runtime_result.blocked:
         logger.warning(
             "Feishu visible reply blocked by validation: internal_issue_codes=%s visible_issue_codes=%s message_id_hash=%s",
-            [issue.code for issue in issues],
-            [issue.code for issue in visible_issues],
+            [issue.code for issue in runtime_result.contract_issues],
+            [issue.code for issue in runtime_result.visible_issues],
             _hash_id(event.message_id),
         )
         return FEISHU_VISIBLE_REPLY_FALLBACK
-    return visible_output
-
-
-def _is_response_format_unavailable(exc: BadRequestError) -> bool:
-    return "response_format" in str(exc) and "unavailable" in str(exc).lower()
-
-
-async def _run_support_answer_json_fallback(
-    settings: Settings,
-    agent_input: str,
-    evidence_pack: SupportEvidencePack,
-) -> SupportAnswer:
-    with custom_span(
-        "agent_json_object_fallback",
-        {
-            **evidence_pack_trace_attributes(evidence_pack),
-            "provider": "openai_compatible_chat_completions",
-            "response_format": "json_object",
-        },
-    ):
-        client = AsyncOpenAI(base_url=settings.llm_base_url, api_key=settings.llm_api_key)
-        response = await client.chat.completions.create(
-            model=settings.support_agent_model,
-            messages=[
-                {"role": "system", "content": _support_answer_json_fallback_instructions()},
-                {"role": "user", "content": agent_input},
-            ],
-            response_format={"type": "json_object"},
-        )
-    content = response.choices[0].message.content or "{}"
-    try:
-        return SupportAnswer.model_validate_json(content)
-    except Exception:
-        return SupportAnswer.model_validate(json.loads(content))
-
-
-def _support_answer_json_fallback_instructions() -> str:
-    return """
-你是飞书客服群里的 AI 客服参考助手。请只输出一个合法 JSON object，不要输出 Markdown 或解释文字。
-
-JSON 字段必须完整：
-issue_type: product_usage / troubleshooting / quality_issue / ticket_followup / unknown
-run_mode: 固定为 Agent SDK
-confidence: 高 / 中 / 低
-confidence_reason: 一句话说明原因
-user_issue_summary: 客户问题摘要
-sku_match: SKU 命中说明
-suggested_reply: 供客服参考、可复制调整的回复
-troubleshooting_steps: 字符串数组
-follow_up_questions: 字符串数组
-official_evidence: 正式依据；无正式命中时写“未查询到可信正式依据，不可编造。”
-history_reference: 历史参考；无命中时写“未查询到可信历史参考，不可编造。”
-ticket_draft: 工单草稿或不建议生成工单原因
-
-安全边界：
-- 只能基于用户问题和证据包作答，不要声称查询了其他系统。
-- 没有正式依据时，不得编造文档、链接、批次、负责人、政策或技术结论。
-- 未审核历史或媒体线索只能作为内部参考，必须标注需人工确认，不能作为正式依据。
-- 不得承诺退款、赔偿、换新、补发或处理时效。
-""".strip()
+    return runtime_result.visible_text
 
 
 async def reply_in_thread(message_id: str, text: str, settings: Settings | None = None) -> ReplyResult:

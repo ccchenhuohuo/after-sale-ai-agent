@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "description": "Pinned OpenClaw Feishu sidecar dependencies for the after-sales copilot gateway.",
+  "dependencies": {
+    "@larksuite/openclaw-lark": "2026.6.10",
+    "openclaw": "2026.6.6"
+  }
+}

@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     support_ocr_provider: str = "disabled"
     support_vector_index_namespace: str = "after_sales_v1"
     support_vector_artifact_dir: str = "data/feishu_runtime/vector_artifacts"
+    openclaw_sidecar_version: str = "2026.6.6"
+    openclaw_lark_plugin_version: str = "2026.6.10"
+    openclaw_feishu_bridge_secret: str = ""
 
     openai_tracing_api_key: str = ""
     openai_org_id: str = ""

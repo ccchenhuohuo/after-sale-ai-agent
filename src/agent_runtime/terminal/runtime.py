@@ -1,18 +1,12 @@
-from agents import Agent, Runner, SQLiteSession, custom_span, flush_traces
+from agents import Agent, Runner, SQLiteSession, flush_traces
 from agents.exceptions import OutputGuardrailTripwireTriggered
 
-from agent_runtime.copilot.answer_contract import apply_data_source_coverage, render_support_answer, validate_answer_contract
 from agent_runtime.copilot.case_context import SupportCaseRequest
-from agent_runtime.copilot.context_assembly import build_data_source_coverage
-from agent_runtime.copilot.evidence import evidence_pack_trace_attributes, short_hash
-from agent_runtime.copilot.evidence_collection import collect_support_evidence
-from agent_runtime.copilot.pipeline import build_support_case_context
-from agent_runtime.copilot.prompts import build_agent_input
+from agent_runtime.copilot.evidence import short_hash
+from agent_runtime.copilot.runtime import run_support_case_request
 from agent_runtime.llm import build_run_config
 from agent_runtime.terminal.session import session_items_to_text
 from agent_runtime.terminal.ui import active_model_label, cyan, dim, green, yellow
-from agent_runtime.tools.history_rag import history_rag_index_available
-from agent_runtime.tools.media_rag import media_rag_index_available
 
 
 def build_compactor(model_name: str) -> Agent:
@@ -67,60 +61,27 @@ async def compact_context(settings, session: SQLiteSession) -> None:
 async def run_turn(agent, settings, session: SQLiteSession, user_input: str) -> None:
     print(dim("\nAgent 正在分析..."))
     try:
-        with custom_span(
-            "support_turn",
-            {
-                "entrypoint": "terminal",
-                "loop_version": "v2",
-                "raw_issue_hash": short_hash(user_input),
+        request = SupportCaseRequest(
+            request_id=f"terminal:{short_hash(user_input)}",
+            source="terminal",
+            user_text=user_input,
+            trace_group_id="terminal-chat",
+        )
+        runtime_result = await run_support_case_request(
+            request,
+            settings,
+            entrypoint="terminal",
+            source_label="本地终端",
+            session=session,
+            run_config_group_id="terminal-chat",
+            run_config_metadata={
+                "source": "terminal-chat",
+                "model_label": active_model_label(settings),
             },
-        ):
-            request = SupportCaseRequest(
-                request_id=f"terminal:{short_hash(user_input)}",
-                source="terminal",
-                user_text=user_input,
-                trace_group_id="terminal-chat",
-            )
-            case_result = await build_support_case_context(request, settings)
-            evidence_pack = await collect_support_evidence(case_result.context.normalized_query, settings)
-            coverage = build_data_source_coverage(case_result.context, evidence_pack)
-            result = await Runner.run(
-                agent,
-                build_agent_input(
-                    user_input,
-                    source="本地终端",
-                    evidence_pack=evidence_pack,
-                    case_context=case_result.context,
-                    coverage=coverage,
-                ),
-                context=evidence_pack,
-                session=session,
-                run_config=build_run_config(
-                    settings,
-                    group_id="terminal-chat",
-                    metadata={
-                        "source": "terminal-chat",
-                        "entrypoint": "terminal",
-                        "loop_version": "v2",
-                        "model_label": active_model_label(settings),
-                        "history_index_available": history_rag_index_available(settings),
-                        "media_index_available": media_rag_index_available(settings),
-                    },
-                ),
-            )
-            final_answer = apply_data_source_coverage(result.final_output, coverage)
-            final_output = render_support_answer(final_answer)
-            with custom_span(
-                "answer_contract_check",
-                {
-                    **evidence_pack_trace_attributes(evidence_pack),
-                    "entrypoint": "terminal",
-                },
-            ):
-                contract_issues = validate_answer_contract(
-                    final_output,
-                    history_connected=history_rag_index_available(settings),
-                )
+        )
+        final_output = runtime_result.internal_text
+        contract_issues = runtime_result.contract_issues
+        _ = agent
     except OutputGuardrailTripwireTriggered as exc:
         flush_traces()
         print("\n" + yellow("输出安全校验未通过，已阻断本轮答案。"))

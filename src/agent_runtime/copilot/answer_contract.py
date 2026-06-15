@@ -89,6 +89,18 @@ FEISHU_VISIBLE_INTERNAL_PATTERNS = [
     re.compile(r"未审核媒体观察证据"),
 ]
 
+FEISHU_VISIBLE_REFERENCE_LEAK_PATTERNS = [
+    re.compile(r"\bhttps?://[^\s，。；；)）]+", re.IGNORECASE),
+    re.compile(r"\bfile://[^\s，。；；)）]+", re.IGNORECASE),
+    re.compile(r"(?:^|[\s：:])/(?:tmp|var|opt|home|Users|private|mnt|data)/[^\s，。；；)）]+"),
+    re.compile(r"\b[A-Za-z]:\\[^\s，。；；)）]+"),
+    re.compile(r"\b(?:file[_-]?key|fileKey|imageKey|mediaKey|file_token)\b", re.IGNORECASE),
+    re.compile(r"\b(?:img|file|media)_[A-Za-z0-9][A-Za-z0-9_-]{6,}\b", re.IGNORECASE),
+    re.compile(r"\b(?:vector[_-]?id|vector ref|vector_ref)\b", re.IGNORECASE),
+    re.compile(r"\b(?:vec|vector)[:_][A-Za-z0-9][A-Za-z0-9_:-]{6,}\b", re.IGNORECASE),
+    re.compile(r"\[[+-]?(?:0|1)?\.\d{2,}\s*,\s*[+-]?(?:0|1)?\.\d{2,}"),
+]
+
 FEISHU_VISIBLE_MARKDOWN_PATTERNS = [
     re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE),
     re.compile(r"^\s{0,3}(?:[-*+]\s+|\d+[.)]\s+)", re.MULTILINE),
@@ -256,6 +268,10 @@ def validate_feishu_visible_reply(text: str) -> list[ContractIssue]:
     for pattern in FEISHU_VISIBLE_MARKDOWN_PATTERNS:
         if pattern.search(text):
             issues.append(ContractIssue("visible_markdown", f"飞书可见回复包含 Markdown 痕迹：{pattern.pattern}"))
+            break
+    for pattern in FEISHU_VISIBLE_REFERENCE_LEAK_PATTERNS:
+        if pattern.search(text):
+            issues.append(ContractIssue("visible_reference_leak", "飞书可见回复包含内部附件、路径、URL 或向量引用。"))
             break
     issues.extend(_forbidden_commitment_issues(text))
     return issues

@@ -63,7 +63,15 @@ Drop `--allow-unconfigured` in a configured sidecar environment. Then Feishu
 channel config, plugin list, channel status, and Support Copilot health are all
 required to pass.
 
-Then run the local OpenClaw-shaped contract smoke:
+From the repository root, run the self-contained Python contract smoke first:
+
+```bash
+make smoke-openclaw-contract
+```
+
+This uses FastAPI `TestClient`, so it does not require a running HTTP port or
+Node toolchain. To validate the Node sidecar smoke script against an already
+running localhost Python service, run:
 
 ```bash
 nvm use 22.22.2

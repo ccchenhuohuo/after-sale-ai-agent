@@ -1,6 +1,8 @@
 import json
 
+from agent_runtime.settings import Settings
 from scripts import smoke_support_copilot as smoke
+from scripts import smoke_openclaw_contract
 
 
 def test_default_smoke_passes_without_external_credentials(monkeypatch):
@@ -89,6 +91,28 @@ def test_live_smoke_requires_explicit_environment_flag(monkeypatch):
     failed = [check for check in report["checks"] if check["name"] == "live_smoke_guard"][0]
     assert failed["ok"] is False
     assert "RUN_LIVE_SMOKE=1" in failed["error"]
+
+
+def test_python_openclaw_contract_smoke_is_self_contained_without_runtime_server():
+    report = smoke_openclaw_contract.run_contract_smoke(
+        Settings(openclaw_feishu_bridge_secret="", openclaw_feishu_require_secret=False)
+    )
+
+    assert report["ok"] is True
+    assert report["mode"] == "thread_reply"
+    assert report["replyInThread"] is True
+    assert report["replyToMessageId"] == "om_smoke_image"
+    assert report["requiresSecret"] is False
+
+
+def test_python_openclaw_contract_smoke_uses_configured_secret():
+    report = smoke_openclaw_contract.run_contract_smoke(
+        Settings(openclaw_feishu_bridge_secret="test-secret", openclaw_feishu_require_secret=True)
+    )
+
+    assert report["ok"] is True
+    assert report["requiresSecret"] is True
+    assert report["secretConfigured"] is True
 
 
 def _scenario(report, name):

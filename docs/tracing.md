@@ -12,9 +12,9 @@ Phoenix 地址：
 http://opencloud.taild79054.ts.net:6006
 ```
 
-## DeepSeek 模型与 OpenAI Tracing
+## DeepSeek 模型与 Tracing
 
-DeepSeek 可以通过 OpenAI 兼容接口作为 LLM provider 使用，同时将 traces 单独导出到 OpenAI。
+DeepSeek 可以通过 OpenAI 兼容接口作为 LLM provider 使用。生产默认不把 Agents SDK traces 导出到 OpenAI hosted traces；服务器优先使用 Phoenix / OpenTelemetry 作为运行链路视图。需要 OpenAI Platform traces 时，必须显式打开 hosted tracing。
 
 配置：
 
@@ -29,11 +29,12 @@ SUPPORT_AGENT_USE_CHAT_COMPLETIONS=true
 
 OPENAI_TRACING_API_KEY=
 OPENAI_PROJECT_ID=proj_xxx
+SUPPORT_AGENT_OPENAI_HOSTED_TRACING_ENABLED=false
 SUPPORT_AGENT_TRACING_DISABLED=false
-SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=true
+SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=false
 SUPPORT_AGENT_TRACE_WORKFLOW_NAME=ulanzi after-sell copilot MVP
 
-PHOENIX_TRACING_ENABLED=false
+PHOENIX_TRACING_ENABLED=true
 PHOENIX_COLLECTOR_ENDPOINT=http://opencloud.taild79054.ts.net:6006/v1/traces
 PHOENIX_PROJECT_NAME=agent-runtime-test
 ```
@@ -41,7 +42,8 @@ PHOENIX_PROJECT_NAME=agent-runtime-test
 运行行为：
 
 - `LLM_API_KEY` 只用于模型调用。
-- `OPENAI_TRACING_API_KEY` 只用于向 OpenAI 导出 traces。
+- `SUPPORT_AGENT_OPENAI_HOSTED_TRACING_ENABLED=false` 是生产默认配置，避免服务器在 `api.openai.com` 不可达时反复丢弃 hosted trace batch。
+- `OPENAI_TRACING_API_KEY` 只在 `SUPPORT_AGENT_OPENAI_HOSTED_TRACING_ENABLED=true` 时用于向 OpenAI Platform 导出 traces。
 - `SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=false` 是生产默认配置。trace 默认只记录 hash、长度、状态和延迟，不写用户原文、Agent prompt、原始飞书/OpenClaw ID、file key、local path、URL、最终输出或 raw vector。确需明文复盘时，只在受控本地/临时测试环境开启。
 - `PHOENIX_TRACING_ENABLED=true` 时，运行时会通过 OpenTelemetry/OpenInference 同步发送 traces 到 Tailscale 服务器 Phoenix；仅应在确认数据边界和访问控制后开启。
 - 终端运行使用 `group_id=terminal-chat`。
@@ -139,5 +141,5 @@ agent-runtime-test
 
 ## 说明
 
-- 如果启用 tracing，且模型 provider 不是 OpenAI，同时没有配置 `OPENAI_TRACING_API_KEY`，启动时会给出明确错误。
+- 如果显式启用 OpenAI hosted tracing，且模型 provider 不是 OpenAI，同时没有配置 `OPENAI_TRACING_API_KEY`，启动时会给出明确错误。
 - 如果 OpenAI 组织开启 Zero Data Retention，OpenAI 托管 tracing 可能不可用。

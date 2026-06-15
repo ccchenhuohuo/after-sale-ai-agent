@@ -62,7 +62,7 @@ flowchart TB
 - 旧的本地确定性分析器和本地演示知识已经移除。
 - 合并后的 SKU 支持目录只用于产品识别和负责人流转，不作为故障依据。
 - 正式文档和历史参考必须分开。
-- 正式 KB/MRD/手册采用文件索引 V1；如果正式源索引未接入或没有命中，Agent 必须说明“未查询到可信正式依据”。
+- 正式 KB/MRD/手册采用文件索引 V1；当前生产尚未导入真实 KB/MRD/手册资料。如果正式源索引未接入或没有命中，Agent 必须说明“未查询到可信正式依据”。
 - 飞书群聊历史 FAQ 进入索引后按业务口径视为已审核，可作为可靠售后参考；它不是正式政策源，不能覆盖正式 KB/MRD/SOP，也不能单独支撑退款、换新、补发、最终判责或客户承诺依据。
 - 飞书 raw media 只能作为未审核媒体观察证据；仅命中媒体观察证据时最终动作上限为 `human_review`。附件进入 OCR、视觉 embedding、VL understanding 或 ffmpeg 前必须通过白名单路径/URL 校验，视频还会在 ffmpeg 前做 magic-byte/ffprobe preflight。已下载本地图片可进入 `qwen3-vl-embedding` / `qwen3-vl-rerank` 多模态链路，未下载媒体仍只用于定位图片、视频、截图等待核验素材，不能作为正式技术结论。
 - 视觉能力分三层：OCR 负责截图/铭牌/报错图文字提取；image embedding 负责生成 `vector_id` 并驱动媒体向量检索；VL understanding 使用千问 VL 把产品图、损坏图、包装图和视频关键帧转成结构化视觉摘要注入 `UnifiedCaseContext`。

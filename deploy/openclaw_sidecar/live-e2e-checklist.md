@@ -33,13 +33,22 @@ curl -s http://127.0.0.1:8000/channels/openclaw-feishu/health
 Expected shape:
 
 ```json
-{"ok":true,"channel":"openclaw_feishu","runtime":"support_copilot","requiresSecret":false}
+{"ok":true,"channel":"openclaw_feishu","runtime":"support_copilot","requiresSecret":true,"secretConfigured":true}
 ```
 
-`requiresSecret` is `true` only when `OPENCLAW_FEISHU_BRIDGE_SECRET` is set in
-the Python service.
+`requiresSecret` is `true` by default. `secretConfigured` must also be `true`
+before a live OpenClaw sidecar can call the Python compatibility endpoint.
 
-Then run the local contract smoke:
+Then run the Python-side contract smoke. This validates the OpenClaw-shaped
+payload contract without requiring a running HTTP port or Node toolchain:
+
+```bash
+cd /opt/agent-runtime
+make smoke-openclaw-contract
+```
+
+To validate the Node sidecar script against an already running localhost HTTP
+service, run:
 
 ```bash
 cd deploy/openclaw_sidecar

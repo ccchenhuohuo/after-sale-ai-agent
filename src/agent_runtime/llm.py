@@ -5,6 +5,7 @@ from agents import (
     RunConfig,
     set_default_openai_api,
     set_default_openai_client,
+    set_trace_processors,
     set_tracing_disabled,
     set_tracing_export_api_key,
 )
@@ -53,18 +54,21 @@ def configure_agents_runtime(settings: Settings = None) -> Settings:
     if not settings.llm_api_key:
         raise RuntimeError("LLM_API_KEY is required. Copy .env.example to .env and fill it in.")
 
-    tracing_key = settings.openai_tracing_api_key or os.getenv("OPENAI_API_KEY", "")
+    hosted_tracing_enabled = (
+        settings.support_agent_openai_hosted_tracing_enabled and not settings.support_agent_tracing_disabled
+    )
+    tracing_key = (settings.openai_tracing_api_key or os.getenv("OPENAI_API_KEY", "")) if hosted_tracing_enabled else ""
     use_llm_client_for_tracing = (
-        not settings.support_agent_tracing_disabled
+        hosted_tracing_enabled
         and not tracing_key
         and _is_openai_endpoint(settings.llm_base_url)
     )
 
-    if not settings.support_agent_tracing_disabled and not tracing_key and not use_llm_client_for_tracing:
+    if hosted_tracing_enabled and not tracing_key and not use_llm_client_for_tracing:
         raise RuntimeError(
-            "OPENAI_TRACING_API_KEY is required when tracing is enabled with a non-OpenAI "
-            "LLM provider. Use your platform.openai.com API key for tracing and keep "
-            "LLM_API_KEY as the DeepSeek key."
+            "OPENAI_TRACING_API_KEY is required when OpenAI hosted tracing is enabled with "
+            "a non-OpenAI LLM provider. Use your platform.openai.com API key for tracing "
+            "and keep LLM_API_KEY as the model provider key."
         )
 
     if settings.openai_org_id:
@@ -79,8 +83,10 @@ def configure_agents_runtime(settings: Settings = None) -> Settings:
     if settings.support_agent_use_chat_completions:
         set_default_openai_api("chat_completions")
 
-    if tracing_key:
+    if hosted_tracing_enabled and tracing_key:
         set_tracing_export_api_key(tracing_key)
+    if not hosted_tracing_enabled:
+        set_trace_processors([])
 
     set_tracing_disabled(settings.support_agent_tracing_disabled)
 

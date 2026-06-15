@@ -1,4 +1,8 @@
+from types import SimpleNamespace
+
+from agent_runtime.channels.feishu_reply import render_feishu_visible_runtime_reply
 from agent_runtime.copilot.answer_contract import (
+    FEISHU_VISIBLE_REPLY_FALLBACK,
     SupportAnswer,
     apply_data_source_coverage,
     contract_issues_for_output,
@@ -358,6 +362,41 @@ def test_feishu_visible_reply_validation_blocks_internal_markdown_and_commitment
     assert any(issue.code == "forbidden_commitment" for issue in issues)
     assert validate_feishu_visible_reply("目前信息不足，不要承诺退款、换新或补发。") == []
     assert validate_feishu_visible_reply("先不要承诺24小时内处理，需要人工确认。") == []
+
+
+def test_feishu_visible_reply_validation_blocks_internal_references():
+    cases = [
+        "请参考 https://internal.example/path 再回复客户。",
+        "附件在 /tmp/openclaw/damage.jpg。",
+        "本地路径是 /opt/agent-runtime/data/feishu_runtime/assets/a.jpg。",
+        "file_key=img_v3_abc123456。",
+        "imageKey: img_smoke_damage。",
+        "使用 vector_id vec_public_ref123456 命中。",
+        "raw vector [0.1234, 0.5678] 已写入。",
+    ]
+
+    for text in cases:
+        issues = validate_feishu_visible_reply(text)
+        assert any(issue.code == "visible_reference_leak" for issue in issues), text
+
+
+def test_visible_runtime_reply_falls_back_when_rendered_text_contains_internal_reference():
+    answer = _answer_with_action("answer").model_copy(
+        update={
+            "suggested_reply": "请让客户查看 https://internal.example/path 并提供反馈。",
+        }
+    )
+    result = SimpleNamespace(
+        contract_issues=[],
+        answer=answer,
+        coverage=SimpleNamespace(recommended_action="answer", mention_enabled=False),
+    )
+
+    reply = render_feishu_visible_runtime_reply(result)
+
+    assert reply.blocked is True
+    assert reply.safe_text == FEISHU_VISIBLE_REPLY_FALLBACK
+    assert any(issue.code == "visible_reference_leak" for issue in reply.issues)
 
 
 def test_feishu_visible_reply_validation_blocks_time_commitment():

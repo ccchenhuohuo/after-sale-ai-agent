@@ -43,7 +43,7 @@ flowchart TB
     media --> answer
 ```
 
-当前 SKU 目录是真实可用的，可用于产品身份识别和负责人流转。正式知识库不做假数据兜底：`hybrid_search_kb` 读取 `data/formal_kb/index/latest` 文件型索引，索引缺失或未命中时返回“未查询到可信正式依据”。`search_issue_history` 已升级为混合证据打包：先返回 SKU 精准匹配，再返回已审核群聊历史 FAQ 和媒体观察证据。文本历史 FAQ 默认通过阿里云百炼 `text-embedding-v4` 和 `qwen3-rerank` 调用检索模型；媒体观察证据对已下载图片使用 `qwen3-vl-embedding` / `qwen3-vl-rerank`，并可消费 intake 生成的 `vector_id` 做媒体向量检索；产品图和视频关键帧还会通过 VL understanding 生成可读视觉摘要；未下载图片/视频保留 raw media 元数据 fallback。
+当前 SKU 目录是真实可用的，可用于产品身份识别和负责人流转。正式知识库不做假数据兜底：`hybrid_search_kb` 读取 `data/formal_kb/index/latest` 文件型索引；当前生产尚未导入真实 KB/MRD/手册资料，索引缺失或未命中时返回“未查询到可信正式依据”。`search_issue_history` 已升级为混合证据打包：先返回 SKU 精准匹配，再返回已审核群聊历史 FAQ 和媒体观察证据。文本历史 FAQ 默认通过阿里云百炼 `text-embedding-v4` 和 `qwen3-rerank` 调用检索模型；媒体观察证据对已下载图片使用 `qwen3-vl-embedding` / `qwen3-vl-rerank`，并可消费 intake 生成的 `vector_id` 做媒体向量检索；产品图和视频关键帧还会通过 VL understanding 生成可读视觉摘要；未下载图片/视频保留 raw media 元数据 fallback。
 
 ## 真实飞书采集状态
 

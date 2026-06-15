@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from agent_runtime.copilot.case_context import (
@@ -51,9 +52,20 @@ def safe_artifact_payload_for_llm(artifact: IngestionArtifact) -> dict[str, obje
         "vector_id": artifact.vector_id,
         "model_name": artifact.model_name,
         "index_namespace": artifact.index_namespace,
-        "error": artifact.error,
+        "error": _safe_error_for_llm(artifact.error),
     }
 
 
 def _safe_asset_metadata(metadata: dict[str, Any]) -> dict[str, object]:
     return {key: value for key, value in metadata.items() if key in SAFE_ASSET_METADATA_KEYS}
+
+
+def _safe_error_for_llm(error: str) -> str:
+    text = str(error or "")
+    if not text:
+        return ""
+    text = re.sub(r"https?://[^\s，。；)）]+", "[redacted-url]", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bfile://[^\s，。；)）]+", "[redacted-path]", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?:^|[\s：:])/(?:tmp|var|opt|home|Users|private|mnt|data)/[^\s，。；)）]+", " [redacted-path]", text)
+    text = re.sub(r"\b(?:file[_-]?key|fileKey|imageKey|mediaKey|file_token)\s*[:=]\s*\S+", "[redacted-file-key]", text, flags=re.IGNORECASE)
+    return text[:300]

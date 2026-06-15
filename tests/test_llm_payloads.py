@@ -157,6 +157,26 @@ def test_safe_artifact_payload_keeps_vector_ref_and_drops_metadata():
     assert "0.123456" not in dumped
 
 
+def test_safe_artifact_payload_redacts_error_paths_urls_and_file_keys():
+    artifact = IngestionArtifact(
+        artifact_id="ocr:img_1:error",
+        artifact_type="ocr",
+        status="error",
+        asset_id="img_1",
+        error="failed at /opt/agent-runtime/data/feishu_runtime/assets/a.jpg url=https://internal.example/a file_key=img_secret_123",
+    )
+
+    payload = safe_artifact_payload_for_llm(artifact)
+    dumped = json.dumps(payload, ensure_ascii=False)
+
+    assert "/opt/agent-runtime" not in dumped
+    assert "https://internal.example" not in dumped
+    assert "img_secret_123" not in dumped
+    assert "[redacted-path]" in payload["error"]
+    assert "[redacted-url]" in payload["error"]
+    assert "[redacted-file-key]" in payload["error"]
+
+
 def test_router_agent_payload_is_sanitized_when_enabled(monkeypatch):
     captured: dict[str, object] = {}
 

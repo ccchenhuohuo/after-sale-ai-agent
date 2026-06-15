@@ -47,7 +47,7 @@ flowchart TB
 - 旧 Web Demo 和通用公开 HTTP API 不作为当前运行入口；保留的 HTTP 面只用于受控 channel compatibility endpoint。legacy 飞书生产链路仍不使用公网 webhook。
 - 旧的本地确定性匹配分析器和演示种子知识已经从运行时移除。
 - `search_sku_catalog` 使用 `data/sku_catalog/` 下的真实合并 SKU 目录。
-- 正式知识库工具已接入文件型正式源索引 V1；索引缺失或未命中时返回明确的“未查询到可信正式依据”。
+- 正式知识库工具已接入文件型正式源索引 V1；当前生产尚未导入真实 KB/MRD/手册资料，索引缺失或未命中时返回明确的“未查询到可信正式依据”。
 - `search_issue_history` 已接入群聊历史 FAQ RAG。进入索引的群聊历史 FAQ 默认已审核，可作为可靠售后参考；它不是正式政策源，不能覆盖正式 KB/MRD/SOP，也不能单独支撑退款、换新、补发或最终判责承诺。
 - 当前 v2 loop 由 runtime 先构造 `SupportCaseRequest`，经过 intake route、ingestion artifact 和 `UnifiedCaseContext` 后，再调用 `collect_support_evidence()` 并发收集 SKU、正式依据、历史参考和媒体观察证据，最后把统一上下文、数据源覆盖和结构化证据包交给 Agent 生成 `SupportAnswer`。
 - 附件进入 OCR、视觉 embedding、VL understanding 或 ffmpeg 前必须通过本地目录/URL host 白名单校验；视频在 ffmpeg 抽帧前还会做 magic-byte/ffprobe preflight。默认只信任 legacy 飞书下载缓存；OpenClaw sidecar 的下载目录需要通过 `SUPPORT_ASSET_ALLOWED_LOCAL_DIRS` 显式加入。
@@ -88,10 +88,10 @@ OpenClaw Feishu sidecar compatibility endpoint 随 FastAPI app 暴露：
 ```bash
 uvicorn agent_runtime.feishu.webhook:app --host 127.0.0.1 --port 8000
 curl -s http://127.0.0.1:8000/channels/openclaw-feishu/health
-cd deploy/openclaw_sidecar
-nvm use 22.22.2
-corepack npm run smoke:support-copilot
+make smoke-openclaw-contract
 ```
+
+`make smoke-openclaw-contract` 使用 Python TestClient 自包含验证 OpenClaw-shaped payload，不要求预先启动 HTTP 端口。需要验证真实 Node sidecar 到 localhost HTTP 服务时，再使用 `make smoke-openclaw-sidecar`。
 
 sidecar 环境样例和真实飞书群验收清单位于 `deploy/openclaw_sidecar/`。OpenClaw path 稳定前，legacy `feishu-long-connection` 保留为 fallback。
 
@@ -128,8 +128,9 @@ SUPPORT_AGENT_BILLING_MODE=API Usage Billing
 SUPPORT_INTAKE_ROUTER_ENABLED=false
 SUPPORT_CONTEXT_ASSEMBLER_ENABLED=false
 SUPPORT_OCR_PROVIDER=disabled
-SUPPORT_VISUAL_UNDERSTANDING_PROVIDER=disabled
+SUPPORT_VISUAL_UNDERSTANDING_PROVIDER=bailian_vl
 SUPPORT_VISUAL_UNDERSTANDING_MODEL=qwen-vl-plus
+SUPPORT_AGENT_OPENAI_HOSTED_TRACING_ENABLED=false
 SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=false
 SUPPORT_VECTOR_INDEX_NAMESPACE=after_sales_v1
 SUPPORT_ASSET_ALLOWED_LOCAL_DIRS=
@@ -143,7 +144,7 @@ FORMAL_KB_PROVIDER=local_hash
 FORMAL_KB_REQUIRE_REMOTE_MODELS=false
 ```
 
-`LLM_API_KEY` 只用于实际模型调用，例如 DeepSeek 的 OpenAI-compatible endpoint。`OPENAI_TRACING_API_KEY` 只用于向 OpenAI Platform 导出 Agents SDK traces；当使用非 OpenAI 模型且开启 tracing 时，两者应分开配置。
+`LLM_API_KEY` 只用于实际模型调用，例如 DeepSeek 的 OpenAI-compatible endpoint。生产默认不启用 OpenAI hosted tracing，只保留 Phoenix/本地运行链路；确需导出到 OpenAI Platform 时，设置 `SUPPORT_AGENT_OPENAI_HOSTED_TRACING_ENABLED=true` 并单独配置 `OPENAI_TRACING_API_KEY`。
 
 生产 tracing 默认只记录 hash、长度、状态和延迟，不写用户原文、原始飞书/OpenClaw ID、file key、local path、URL 或 raw vector。确需复盘明文时，只在受控本地/临时测试环境打开 `SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=true`。
 

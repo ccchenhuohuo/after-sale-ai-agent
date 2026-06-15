@@ -35,6 +35,7 @@ Then run the local contract smoke:
 ```bash
 cd deploy/openclaw_sidecar
 nvm use 22.22.2
+corepack npm run doctor:support-copilot
 corepack npm run smoke:support-copilot
 ```
 

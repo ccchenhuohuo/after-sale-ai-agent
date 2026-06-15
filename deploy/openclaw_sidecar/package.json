@@ -5,6 +5,7 @@
   "packageManager": "npm@11.17.0",
   "description": "Pinned OpenClaw Feishu sidecar dependencies for the after-sales copilot gateway.",
   "scripts": {
+    "doctor:support-copilot": "node diagnose-openclaw-feishu.mjs",
     "smoke:support-copilot": "node smoke-openclaw-feishu.mjs"
   },
   "dependencies": {

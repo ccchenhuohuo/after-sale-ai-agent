@@ -50,6 +50,17 @@ Confirm the channel endpoint is reachable without invoking the Agent:
 curl -s http://127.0.0.1:8000/channels/openclaw-feishu/health
 ```
 
+Run the combined OpenClaw + Support Copilot diagnostic before live validation:
+
+```bash
+nvm use 22.22.2
+corepack npm run doctor:support-copilot -- --allow-unconfigured
+```
+
+Drop `--allow-unconfigured` in a configured sidecar environment. Then Feishu
+channel config, plugin list, channel status, and Support Copilot health are all
+required to pass.
+
 Then run the local OpenClaw-shaped contract smoke:
 
 ```bash

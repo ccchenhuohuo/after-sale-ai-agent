@@ -1,6 +1,10 @@
 import ast
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
 
 from agent_runtime.channels.openclaw_feishu.adapter import (
     build_support_case_request_from_openclaw,
@@ -8,7 +12,9 @@ from agent_runtime.channels.openclaw_feishu.adapter import (
 )
 from agent_runtime.channels.openclaw_feishu.assets import support_asset_from_openclaw_resource
 from agent_runtime.channels.openclaw_feishu.responder import build_openclaw_thread_reply, readable_plain_text
+import agent_runtime.channels.openclaw_feishu.webhook as openclaw_webhook
 from agent_runtime.copilot.answer_contract import ContractIssue, FEISHU_VISIBLE_REPLY_FALLBACK, SupportAnswer
+from agent_runtime.settings import Settings
 
 
 def test_openclaw_text_message_converts_to_support_case_request():
@@ -210,6 +216,84 @@ def test_readable_plain_text_flattens_markdown_fallback():
     assert "一 / 二" in text
 
 
+def test_openclaw_webhook_secret_is_checked_before_runtime_configuration(monkeypatch):
+    configured = False
+
+    def fake_configure(settings):
+        nonlocal configured
+        configured = True
+        return settings
+
+    monkeypatch.setattr(
+        openclaw_webhook,
+        "get_settings",
+        lambda: Settings(openclaw_feishu_bridge_secret="secret"),
+    )
+    monkeypatch.setattr(openclaw_webhook, "configure_agents_runtime", fake_configure)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            openclaw_webhook.openclaw_feishu_support_case(
+                {"messageId": "om_msg", "content": "客户反馈 L023 不亮"},
+                authorization="Bearer wrong",
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+    assert configured is False
+
+
+def test_openclaw_webhook_returns_thread_reply_payload(monkeypatch):
+    captured = {}
+
+    async def fake_run_support_case_request(request, settings, **kwargs):
+        captured["request"] = request
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(
+            blocked=False,
+            answer=_support_answer(),
+            contract_issues=[],
+            request=request,
+            coverage=SimpleNamespace(recommended_action="answer"),
+        )
+
+    monkeypatch.setattr(openclaw_webhook, "get_settings", lambda: Settings(llm_api_key="test-key"))
+    monkeypatch.setattr(openclaw_webhook, "configure_agents_runtime", lambda settings: settings)
+    monkeypatch.setattr(openclaw_webhook, "build_support_runtime_session", lambda settings, session_id: "session")
+    monkeypatch.setattr(openclaw_webhook, "run_support_case_request", fake_run_support_case_request)
+
+    reply = asyncio.run(
+        openclaw_webhook.openclaw_feishu_support_case(
+            {
+                "message": {
+                    "chatId": "oc_chat",
+                    "messageId": "om_msg",
+                    "threadId": "omt_thread",
+                    "senderId": "ou_sender",
+                    "content": "客户反馈 L023 不亮",
+                    "resources": [{"type": "image", "imageKey": "img_key"}],
+                }
+            }
+        )
+    )
+
+    assert captured["request"].channel == "openclaw_feishu"
+    assert captured["request"].source_platform == "feishu"
+    assert captured["request"].assets[0].file_key == "img_key"
+    assert captured["kwargs"]["entrypoint"] == "openclaw_feishu"
+    assert captured["kwargs"]["session"] == "session"
+    assert reply["mode"] == "thread_reply"
+    assert reply["replyInThread"] is True
+    assert reply["replyToMessageId"] == "om_msg"
+
+
+def test_openclaw_webhook_rejects_empty_batch():
+    with pytest.raises(HTTPException) as exc_info:
+        openclaw_webhook._request_from_payload({"messages": []})
+
+    assert exc_info.value.status_code == 400
+
+
 def test_copilot_runtime_has_no_feishu_or_openclaw_channel_imports():
     runtime_path = Path(__file__).resolve().parents[1] / "src" / "agent_runtime" / "copilot" / "runtime.py"
     tree = ast.parse(runtime_path.read_text(encoding="utf-8"))
@@ -232,3 +316,20 @@ def test_copilot_runtime_has_no_feishu_or_openclaw_channel_imports():
     assert not any(module.startswith(forbidden) for module in imported_modules)
     assert "render_feishu_reply" not in imported_names
     assert "validate_feishu_visible_reply" not in imported_names
+
+
+def _support_answer() -> SupportAnswer:
+    return SupportAnswer(
+        issue_type="unknown",
+        run_mode="Agent SDK",
+        confidence="低",
+        confidence_reason="未查询到可信正式依据。",
+        user_issue_summary="客户反馈设备异常。",
+        sku_match="未在 SKU 目录中命中；需要补充订单 SKU、包装 SKU、产品铭牌或图片。",
+        suggested_reply="建议先安抚客户，并说明需要补充信息后再确认处理方式。",
+        troubleshooting_steps=["确认型号"],
+        follow_up_questions=["请补充 SKU"],
+        official_evidence="未查询到可信正式依据，不可编造。",
+        history_reference="未查询到可信历史参考，不可编造。",
+        ticket_draft="不建议生成工单，并说明原因。",
+    )

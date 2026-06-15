@@ -1,6 +1,12 @@
 {
+  "name": "openclaw-sidecar",
   "private": true,
+  "type": "module",
+  "packageManager": "npm@11.17.0",
   "description": "Pinned OpenClaw Feishu sidecar dependencies for the after-sales copilot gateway.",
+  "scripts": {
+    "smoke:support-copilot": "node smoke-openclaw-feishu.mjs"
+  },
   "dependencies": {
     "@larksuite/openclaw-lark": "2026.6.10",
     "openclaw": "2026.6.6"

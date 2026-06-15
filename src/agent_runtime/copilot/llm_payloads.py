@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import re
 from typing import Any
 
 from agent_runtime.copilot.case_context import (
@@ -8,6 +6,7 @@ from agent_runtime.copilot.case_context import (
     SupportAsset,
     SupportCaseRequest,
 )
+from agent_runtime.copilot.reference_safety import redact_internal_references
 
 
 SAFE_ASSET_METADATA_KEYS = frozenset(
@@ -61,11 +60,4 @@ def _safe_asset_metadata(metadata: dict[str, Any]) -> dict[str, object]:
 
 
 def _safe_error_for_llm(error: str) -> str:
-    text = str(error or "")
-    if not text:
-        return ""
-    text = re.sub(r"https?://[^\s，。；)）]+", "[redacted-url]", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bfile://[^\s，。；)）]+", "[redacted-path]", text, flags=re.IGNORECASE)
-    text = re.sub(r"(?:^|[\s：:])/(?:tmp|var|opt|home|Users|private|mnt|data)/[^\s，。；)）]+", " [redacted-path]", text)
-    text = re.sub(r"\b(?:file[_-]?key|fileKey|imageKey|mediaKey|file_token)\s*[:=]\s*\S+", "[redacted-file-key]", text, flags=re.IGNORECASE)
-    return text[:300]
+    return redact_internal_references(error, max_chars=300)

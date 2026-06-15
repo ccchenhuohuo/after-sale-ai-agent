@@ -7,8 +7,10 @@ from agent_runtime.copilot.evidence import (
     MediaEvidence,
     OfficialKbEvidence,
     SkuEvidence,
+    SupportEvidencePack,
     render_evidence_pack,
 )
+from agent_runtime.copilot.prompts import build_agent_input
 from agent_runtime.settings import Settings
 
 
@@ -213,3 +215,89 @@ def test_collect_support_evidence_passes_context_vector_refs_to_media(monkeypatc
     asyncio.run(evidence_collection.collect_support_evidence(context, Settings()))
 
     assert seen_vector_refs == ["vec_damage_ref"]
+
+
+def test_agent_prompt_redacts_internal_references_from_evidence_pack():
+    pack = SupportEvidencePack(
+        raw_issue_hash="hash",
+        query_chars=20,
+        issue_type="quality_issue",
+        product_model="L023",
+        sku=[
+            SkuEvidence(
+                status="hit",
+                evidence_level="identity_only",
+                verified=True,
+                query_hash="sku-hash",
+                sku="L023",
+                spu="L023",
+                sku_name_cn="测试 SKU",
+                product_name_cn="测试产品",
+                product_owner_name="负责人",
+                score=100,
+                matched_reasons=["sku精确匹配"],
+            )
+        ],
+        official=[
+            OfficialKbEvidence(
+                status="hit",
+                evidence_level="formal",
+                verified=True,
+                query_hash="official-hash",
+                title="正式售后政策",
+                section="/opt/agent-runtime/private/section",
+                reference_url="https://internal.example/kb/l023",
+            )
+        ],
+        history=[
+            HistoryEvidence(
+                status="hit",
+                evidence_level="reviewed_case",
+                verified=True,
+                query_hash="history-hash",
+                topic_id="thread-1",
+                message=(
+                    "- 话题ID：thread-1\n"
+                    "  问题摘要：客户反馈不亮\n"
+                    "  话题链接：https://feishu.example/history/thread-1\n"
+                    "  附件路径：/opt/agent-runtime/data/feishu_runtime/assets/a.jpg\n"
+                    "  file_key=img_secret_123456"
+                ),
+            )
+        ],
+        media=[
+            MediaEvidence(
+                status="hit",
+                evidence_level="unreviewed_media",
+                verified=False,
+                query_hash="media-hash",
+                media_id="media_secret_123456",
+                message=(
+                    "- 话题ID：thread-2\n"
+                    "  媒体观察摘要：图片疑似划伤\n"
+                    "  消息链接：https://feishu.example/history/message-2\n"
+                    "  向量：vector_id=vec_secret_abcdef\n"
+                    "  embedding=[0.123456, 0.654321]"
+                ),
+            )
+        ],
+    )
+
+    prompt = build_agent_input(
+        "客户发来产品损坏图",
+        source="飞书客服群",
+        evidence_pack=pack,
+    )
+
+    assert "https://internal.example" not in prompt
+    assert "https://feishu.example" not in prompt
+    assert "/opt/agent-runtime" not in prompt
+    assert "img_secret_123456" not in prompt
+    assert "media_secret_123456" not in prompt
+    assert "vec_secret_abcdef" not in prompt
+    assert "0.123456" not in prompt
+    assert "[redacted-url]" in prompt
+    assert "[redacted-path]" in prompt
+    assert "[redacted-file-key]" in prompt
+    assert "[redacted-vector-ref]" in prompt
+    assert "[redacted-vector]" in prompt

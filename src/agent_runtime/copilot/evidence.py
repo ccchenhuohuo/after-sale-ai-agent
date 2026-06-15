@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Literal
 
+from agent_runtime.copilot.reference_safety import redact_internal_references
+
 
 EvidenceLevel = Literal[
     "identity_only",
@@ -135,7 +137,9 @@ def render_sku_evidence(items: list[SkuEvidence]) -> str:
         return "未在SKU目录中命中。请向客服追问客户截图、订单SKU、包装SKU或产品铭牌信息。"
 
     if all(item.status != "hit" for item in items):
-        return items[0].message or "未在SKU目录中命中。请向客服追问客户截图、订单SKU、包装SKU或产品铭牌信息。"
+        return _prompt_safe_text(
+            items[0].message or "未在SKU目录中命中。请向客服追问客户截图、订单SKU、包装SKU或产品铭牌信息。"
+        )
 
     lines: list[str] = []
     for item in items:
@@ -146,13 +150,13 @@ def render_sku_evidence(items: list[SkuEvidence]) -> str:
         lines.append(
             "\n".join(
                 [
-                    f"- SKU：{item.sku}",
-                    f"  SPU：{item.spu}",
-                    f"  SKU品名：{item.sku_name_cn}",
-                    f"  产品名：{item.product_name_cn}",
-                    f"  产品负责人：{item.product_owner_name}",
+                    f"- SKU：{_prompt_safe_text(item.sku)}",
+                    f"  SPU：{_prompt_safe_text(item.spu)}",
+                    f"  SKU品名：{_prompt_safe_text(item.sku_name_cn)}",
+                    f"  产品名：{_prompt_safe_text(item.product_name_cn)}",
+                    f"  产品负责人：{_prompt_safe_text(item.product_owner_name)}",
                     f"  命中分：{score_text}",
-                    f"  命中原因：{'、'.join(item.matched_reasons)}",
+                    f"  命中原因：{_prompt_safe_text('、'.join(item.matched_reasons))}",
                 ]
             )
         )
@@ -163,9 +167,9 @@ def render_official_evidence(items: list[OfficialKbEvidence]) -> str:
     if not items:
         return "未查询到可信正式依据：正式知识库/RAG 索引尚未接入当前终端测试运行。不要编造文档名称、章节、链接、政策或技术结论。"
     if all(item.status != "hit" for item in items):
-        return items[0].message
+        return _prompt_safe_text(items[0].message)
     return "\n".join(
-        f"- {item.title or '正式依据'} / {item.section or '未标注章节'} / {item.reference_url or '无链接'}"
+        f"- {_prompt_safe_text(item.title or '正式依据')} / {_prompt_safe_text(item.section or '未标注章节')} / 链接已隐藏"
         for item in items
         if item.status == "hit"
     )
@@ -175,16 +179,16 @@ def render_history_evidence(items: list[HistoryEvidence]) -> str:
     if not items:
         return "未查询到可信历史参考：没有命中相似话题。"
     if all(item.status != "hit" for item in items):
-        return items[0].message
-    return "\n".join(item.message for item in items if item.status == "hit")
+        return _prompt_safe_text(items[0].message)
+    return "\n".join(_prompt_safe_text(item.message) for item in items if item.status == "hit")
 
 
 def render_media_evidence(items: list[MediaEvidence]) -> str:
     if not items:
         return "未查询到可信媒体观察证据：没有命中相似媒体记录。"
     if all(item.status != "hit" for item in items):
-        return items[0].message
-    return "\n".join(item.message for item in items if item.status == "hit")
+        return _prompt_safe_text(items[0].message)
+    return "\n".join(_prompt_safe_text(item.message) for item in items if item.status == "hit")
 
 
 def render_evidence_pack(pack: SupportEvidencePack) -> str:
@@ -215,6 +219,10 @@ def render_evidence_pack(pack: SupportEvidencePack) -> str:
             "- 退款、赔偿、换新、补发、维修时效或最终判责，必须等待正式依据或人工复核。",
         ]
     )
+
+
+def _prompt_safe_text(value: object) -> str:
+    return redact_internal_references(value)
 
 
 def evidence_pack_trace_attributes(pack: SupportEvidencePack) -> dict[str, object]:

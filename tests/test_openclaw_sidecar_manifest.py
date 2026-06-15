@@ -14,8 +14,10 @@ def test_openclaw_sidecar_manifest_pins_runtime_and_support_copilot_smoke():
     assert package["scripts"]["smoke:support-copilot"] == "node smoke-openclaw-feishu.mjs"
     assert package["dependencies"]["openclaw"] == "2026.6.6"
     assert package["dependencies"]["@larksuite/openclaw-lark"] == "2026.6.10"
+    assert package["overrides"]["axios"] == "1.18.0"
     assert lockfile["packages"][""]["dependencies"]["openclaw"] == "2026.6.6"
     assert lockfile["packages"][""]["dependencies"]["@larksuite/openclaw-lark"] == "2026.6.10"
+    assert lockfile["packages"]["node_modules/axios"]["version"] == "1.18.0"
 
 
 def test_openclaw_sidecar_smoke_script_preserves_endpoint_contract():
@@ -58,6 +60,9 @@ def test_openclaw_sidecar_deployment_docs_preserve_live_validation_gate():
     assert "/channels/openclaw-feishu/health" in checklist
     assert "doctor:support-copilot" in checklist
     assert "replyInThread=true" in checklist
+    assert "corepack npm audit --omit=dev --audit-level=high" in checklist
     assert "Legacy `feishu-long-connection`" in checklist
+    assert "axios@1.18.0" in readme
+    assert "corepack npm audit --omit=dev --audit-level=high" in readme
     assert "support-copilot.env.example" in readme
     assert "live-e2e-checklist.md" in readme

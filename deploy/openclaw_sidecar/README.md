@@ -22,10 +22,12 @@ corepack prepare npm@11.17.0 --activate
 corepack npm install --package-lock-only --ignore-scripts
 ```
 
-The current dependency audit reports high-severity issues through
-`@larksuite/openclaw-lark -> @larksuiteoapi/node-sdk -> axios`, with no npm
-fix available at the time this lockfile was generated. Treat OpenClaw upgrades
-as explicit dependency-review PRs rather than ad hoc runtime updates.
+`@larksuite/openclaw-lark -> @larksuiteoapi/node-sdk` still declares
+`axios~1.13.3`, so this sidecar uses an npm `overrides` entry to pin the
+resolved transitive package to `axios@1.18.0`. Keep
+`corepack npm audit --omit=dev --audit-level=high` at zero known high-severity
+findings before live Feishu validation. Treat OpenClaw or override changes as explicit
+dependency-review PRs rather than ad hoc runtime updates.
 
 ## Support Copilot contract smoke
 

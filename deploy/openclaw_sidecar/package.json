@@ -11,5 +11,8 @@
   "dependencies": {
     "@larksuite/openclaw-lark": "2026.6.10",
     "openclaw": "2026.6.6"
+  },
+  "overrides": {
+    "axios": "1.18.0"
   }
 }

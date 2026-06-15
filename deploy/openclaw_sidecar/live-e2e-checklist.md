@@ -12,6 +12,8 @@ real group.
   service and the OpenClaw sidecar environment.
 - OpenClaw sidecar uses `openclaw@2026.6.6` and
   `@larksuite/openclaw-lark@2026.6.10`.
+- `corepack npm audit --omit=dev --audit-level=high` reports zero high-severity
+  findings in `deploy/openclaw_sidecar/`.
 - Feishu app credentials, encrypt key, verification token, permissions, bot
   membership, and target test group are configured in OpenClaw Lark plugin
   config.

@@ -420,6 +420,54 @@ def test_openclaw_webhook_returns_thread_reply_payload(monkeypatch):
     assert reply["replyToMessageId"] == "om_msg"
 
 
+def test_openclaw_webhook_contract_only_smoke_does_not_configure_runtime(monkeypatch):
+    configured = False
+
+    def fake_configure(settings):
+        nonlocal configured
+        configured = True
+        raise AssertionError("contractOnly smoke must not configure the LLM runtime")
+
+    monkeypatch.setattr(openclaw_webhook, "get_settings", lambda: Settings())
+    monkeypatch.setattr(openclaw_webhook, "configure_agents_runtime", fake_configure)
+
+    reply = asyncio.run(
+        openclaw_webhook.openclaw_feishu_support_case(
+            {
+                "contractOnly": True,
+                "batchId": "batch_1",
+                "messages": [
+                    {
+                        "chatId": "oc_chat",
+                        "messageId": "om_text",
+                        "threadId": "omt_thread",
+                        "senderId": "ou_sender",
+                        "content": "客户反馈 L023 不亮，补了一张图片。",
+                        "contentType": "text",
+                    },
+                    {
+                        "chatId": "oc_chat",
+                        "messageId": "om_image",
+                        "threadId": "omt_thread",
+                        "senderId": "ou_sender",
+                        "contentType": "image",
+                        "resources": [{"type": "image", "imageKey": "img_key"}],
+                    },
+                ],
+            }
+        )
+    )
+
+    assert configured is False
+    assert reply["mode"] == "thread_reply"
+    assert reply["replyInThread"] is True
+    assert reply["chatId"] == "oc_chat"
+    assert reply["threadId"] == "omt_thread"
+    assert reply["replyToMessageId"] == "om_image"
+    assert reply["metadata"]["recommendedAction"] == "human_review"
+    assert reply["metadata"]["blocked"] is False
+
+
 def test_openclaw_webhook_rejects_empty_batch():
     with pytest.raises(HTTPException) as exc_info:
         openclaw_webhook._request_from_payload({"messages": []})

@@ -76,9 +76,11 @@ Optional environment variables:
 - `OPENCLAW_FEISHU_BRIDGE_SECRET`: sends the `x-openclaw-feishu-secret` header when configured
 
 The smoke payload includes a two-message burst with text plus an image resource
-whose download is marked as failed. A successful response must be a Feishu
-thread reply payload with `mode=thread_reply`, `replyInThread=true`, and a
-readable fallback text.
+whose download is marked as failed. It sets `contractOnly=true`, so the Python
+endpoint validates OpenClaw payload normalization and thread-reply rendering
+without requiring an LLM API key or invoking the Agent. A successful response
+must be a Feishu thread reply payload with `mode=thread_reply`,
+`replyInThread=true`, and a readable fallback text.
 
 Use `support-copilot.env.example` for sidecar environment wiring and
 `live-e2e-checklist.md` for the real Feishu group validation gate.

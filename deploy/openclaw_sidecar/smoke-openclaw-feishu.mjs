@@ -6,6 +6,7 @@ const endpoint =
 const secret = process.env.OPENCLAW_FEISHU_BRIDGE_SECRET || "";
 
 const payload = {
+  contractOnly: true,
   batchId: "smoke-openclaw-feishu-001",
   messages: [
     {

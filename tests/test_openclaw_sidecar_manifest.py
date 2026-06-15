@@ -26,6 +26,7 @@ def test_openclaw_sidecar_smoke_script_preserves_endpoint_contract():
     assert "/channels/openclaw-feishu/support-case" in script
     assert "OPENCLAW_FEISHU_BRIDGE_SECRET" in script
     assert "x-openclaw-feishu-secret" in script
+    assert "contractOnly" in script
     assert "batchId" in script
     assert "messages" in script
     assert "thread_reply" in script

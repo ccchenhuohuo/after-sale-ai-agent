@@ -43,6 +43,73 @@ def test_openclaw_text_message_converts_to_support_case_request():
     assert request.metadata["channel"] == "openclaw_feishu"
 
 
+def test_openclaw_official_message_context_converts_to_support_case_request():
+    request = build_support_case_request_from_openclaw(
+        {
+            "chatId": "oc_chat",
+            "messageId": "om_msg",
+            "senderId": "ou_sender",
+            "senderName": "客服",
+            "chatType": "group",
+            "content": "客户反馈屏幕黑屏",
+            "contentType": "text",
+            "resources": [
+                {
+                    "type": "image",
+                    "fileKey": "img_key",
+                    "fileName": "screen.jpg",
+                }
+            ],
+            "rawMessage": {
+                "message_id": "om_raw",
+                "chat_id": "oc_raw",
+                "thread_id": "omt_thread",
+                "root_id": "om_root",
+                "parent_id": "om_parent",
+                "chat_type": "group",
+                "message_type": "image",
+            },
+            "rawSender": {"sender_id": {"open_id": "ou_raw_sender"}},
+        }
+    )
+
+    assert request.chat_id == "oc_chat"
+    assert request.thread_id == "omt_thread"
+    assert request.message_id == "om_msg"
+    assert request.sender_id == "ou_sender"
+    assert request.user_text == "客户反馈屏幕黑屏"
+    assert request.metadata["chat_type"] == "group"
+    assert request.metadata["content_type"] == "text"
+    assert request.metadata["root_id"] == "om_root"
+    assert request.metadata["parent_id"] == "om_parent"
+    assert request.assets[0].asset_id == "om_msg:image:img_key"
+    assert request.assets[0].filename == "screen.jpg"
+
+
+def test_openclaw_raw_message_context_fallbacks_are_supported():
+    request = build_support_case_request_from_openclaw(
+        {
+            "content": "客户反馈无法充电",
+            "rawMessage": {
+                "message_id": "om_raw",
+                "chat_id": "oc_raw",
+                "thread_id": "omt_raw_thread",
+                "chat_type": "group",
+                "message_type": "text",
+            },
+            "rawSender": {"sender_id": {"open_id": "ou_raw_sender"}},
+        }
+    )
+
+    assert request.chat_id == "oc_raw"
+    assert request.thread_id == "omt_raw_thread"
+    assert request.message_id == "om_raw"
+    assert request.sender_id == "ou_raw_sender"
+    assert request.session_id == "openclaw-feishu:oc_raw:thread:omt_raw_thread"
+    assert request.metadata["chat_type"] == "group"
+    assert request.metadata["content_type"] == "text"
+
+
 def test_openclaw_media_resources_convert_to_support_assets():
     message = {
         "chatId": "oc_chat",
@@ -80,6 +147,46 @@ def test_openclaw_media_resources_convert_to_support_assets():
     assert request.assets[0].local_path == "/tmp/openclaw/chat_screenshot.png"
     assert request.assets[1].file_key == "video_key"
     assert request.assets[2].filename == "invoice.pdf"
+
+
+def test_openclaw_inbound_envelope_media_payload_converts_to_support_assets():
+    request = build_support_case_request_from_openclaw(
+        {
+            "BodyForAgent": "客户补充了损坏图片和视频",
+            "To": "oc_chat",
+            "CurrentMessageId": "om_env",
+            "MessageThreadId": "omt_env_thread",
+            "SenderId": "ou_sender",
+            "MediaPaths": ["/tmp/openclaw/damage.jpg", "/tmp/openclaw/fault.mp4"],
+            "MediaTypes": ["image/jpeg", "video/mp4"],
+            "MediaUrls": ["/tmp/openclaw/damage.jpg", "/tmp/openclaw/fault.mp4"],
+        }
+    )
+
+    assert request.chat_id == "oc_chat"
+    assert request.thread_id == "omt_env_thread"
+    assert request.message_id == "om_env"
+    assert request.sender_id == "ou_sender"
+    assert request.user_text == "客户补充了损坏图片和视频"
+    assert [asset.media_type for asset in request.assets] == ["image", "video"]
+    assert request.assets[0].local_path == "/tmp/openclaw/damage.jpg"
+    assert request.assets[1].local_path == "/tmp/openclaw/fault.mp4"
+
+
+def test_openclaw_route_target_envelope_is_normalized():
+    request = build_support_case_request_from_openclaw(
+        {
+            "BodyForAgent": "客户继续追问处理进度",
+            "To": "chat:oc_chat#__feishu_reply_to=om_parent&__feishu_thread_id=omt_thread",
+            "CurrentMessageId": "om_current",
+            "SenderId": "ou_sender",
+        }
+    )
+
+    assert request.chat_id == "oc_chat"
+    assert request.thread_id == "omt_thread"
+    assert request.message_id == "om_current"
+    assert request.session_id == "openclaw-feishu:oc_chat:thread:omt_thread"
 
 
 def test_openclaw_download_failure_asset_does_not_block_request_construction():

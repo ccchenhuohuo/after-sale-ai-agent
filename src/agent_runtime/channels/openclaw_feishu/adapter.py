@@ -15,6 +15,8 @@ def build_support_case_request_from_openclaw(message: Mapping[str, Any]) -> Supp
     return SupportCaseRequest(
         request_id=f"openclaw-feishu:{short_hash(message_id or chat_id or _text_from_message(message))}",
         source="feishu",
+        channel="openclaw_feishu",
+        source_platform="feishu",
         user_text=_text_from_message(message),
         assets=support_assets_from_openclaw_resources(message.get("resources"), message_id=message_id),
         chat_id=chat_id,
@@ -53,6 +55,8 @@ def build_support_case_request_from_openclaw_batch(
     return SupportCaseRequest(
         request_id=f"openclaw-feishu-batch:{short_hash(stable_id)}",
         source="feishu",
+        channel="openclaw_feishu",
+        source_platform="feishu",
         user_text=text,
         assets=assets,
         chat_id=chat_id,

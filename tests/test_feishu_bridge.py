@@ -187,6 +187,8 @@ def test_feishu_adapter_converts_image_message_to_support_asset(tmp_path):
     request = build_support_case_request_from_event(event, settings)
 
     assert request.user_text == "看下这个截图"
+    assert request.channel == "legacy_feishu"
+    assert request.source_platform == "feishu"
     assert len(request.assets) == 1
     assert request.assets[0].media_type == "image"
     assert request.assets[0].file_key == "img_v3_abc"
@@ -211,6 +213,8 @@ def test_feishu_adapter_converts_video_message_to_support_asset(tmp_path):
     request = build_support_case_request_from_event(event, settings)
 
     assert request.user_text == "故障视频"
+    assert request.channel == "legacy_feishu"
+    assert request.source_platform == "feishu"
     assert len(request.assets) == 1
     assert request.assets[0].media_type == "video"
     assert request.assets[0].file_key == "video_v3_abc"

@@ -44,6 +44,8 @@ class SupportCaseRequest(BaseModel):
 
     request_id: str
     source: Literal["terminal", "feishu", "api", "unknown"] = "unknown"
+    channel: str = ""
+    source_platform: str = ""
     user_text: str = ""
     assets: list[SupportAsset] = Field(default_factory=list)
     chat_id: str = ""

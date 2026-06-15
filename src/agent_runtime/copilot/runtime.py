@@ -12,10 +12,8 @@ from agent_runtime.copilot.answer_contract import (
     ContractIssue,
     SupportAnswer,
     apply_data_source_coverage,
-    render_feishu_reply,
     render_support_answer,
     validate_answer_contract,
-    validate_feishu_visible_reply,
 )
 from agent_runtime.copilot.case_context import DataSourceCoverage, SupportCaseContextResult, SupportCaseRequest
 from agent_runtime.copilot.context_assembly import build_data_source_coverage
@@ -42,13 +40,11 @@ class SupportRuntimeResult(BaseModel):
     coverage: DataSourceCoverage
     answer: SupportAnswer
     internal_text: str
-    visible_text: str
     contract_issues: list[ContractIssue] = Field(default_factory=list)
-    visible_issues: list[ContractIssue] = Field(default_factory=list)
 
     @property
     def blocked(self) -> bool:
-        return bool(self.contract_issues or self.visible_issues)
+        return bool(self.contract_issues)
 
 
 def build_support_runtime_session(settings: Settings, session_id: str) -> SQLiteSession:
@@ -68,7 +64,6 @@ async def run_support_case_request(
     session: SQLiteSession | None = None,
     run_config_group_id: str = "",
     run_config_metadata: dict[str, object] | None = None,
-    render_visible_reply: bool = False,
 ) -> SupportRuntimeResult:
     agent = build_support_copilot(settings.support_agent_model)
     raw_issue = request.user_text
@@ -132,22 +127,6 @@ async def run_support_case_request(
                 history_connected=history_rag_index_available(settings),
             )
 
-        if render_visible_reply:
-            visible_text = render_feishu_reply(final_answer)
-            visible_issues = validate_feishu_visible_reply(visible_text)
-            with custom_span(
-                "visible_reply_check",
-                {
-                    "entrypoint": entrypoint,
-                    "internal_issue_codes": [issue.code for issue in contract_issues],
-                    "visible_issue_codes": [issue.code for issue in visible_issues],
-                },
-            ):
-                pass
-        else:
-            visible_text = internal_text
-            visible_issues = []
-
         flush_traces()
 
     return SupportRuntimeResult(
@@ -157,9 +136,7 @@ async def run_support_case_request(
         coverage=coverage,
         answer=final_answer,
         internal_text=internal_text,
-        visible_text=visible_text,
         contract_issues=contract_issues,
-        visible_issues=visible_issues,
     )
 
 

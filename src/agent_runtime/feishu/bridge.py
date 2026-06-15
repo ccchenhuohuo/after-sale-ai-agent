@@ -10,6 +10,7 @@ from agents.exceptions import OutputGuardrailTripwireTriggered
 
 from agent_runtime.copilot.answer_contract import FEISHU_VISIBLE_REPLY_FALLBACK
 from agent_runtime.copilot.runtime import build_support_runtime_session, run_support_case_request
+from agent_runtime.channels.feishu_reply import render_feishu_visible_runtime_reply
 from agent_runtime.feishu.adapter import build_feishu_user_text, build_support_case_request_from_event
 from agent_runtime.feishu.admission import BotIdentity, should_accept
 from agent_runtime.feishu.events import (
@@ -101,17 +102,16 @@ async def run_support_agent_for_event(event: FeishuMessageEvent, settings: Setti
             "thread_id_hash": _hash_id(thread_id),
             "message_id_hash": _hash_id(event.message_id),
         },
-        render_visible_reply=True,
     )
-    if runtime_result.blocked:
+    visible_reply = render_feishu_visible_runtime_reply(runtime_result)
+    if visible_reply.blocked:
         logger.warning(
-            "Feishu visible reply blocked by validation: internal_issue_codes=%s visible_issue_codes=%s message_id_hash=%s",
-            [issue.code for issue in runtime_result.contract_issues],
-            [issue.code for issue in runtime_result.visible_issues],
+            "Feishu visible reply blocked by validation: issue_codes=%s message_id_hash=%s",
+            [issue.code for issue in visible_reply.issues],
             _hash_id(event.message_id),
         )
         return FEISHU_VISIBLE_REPLY_FALLBACK
-    return runtime_result.visible_text
+    return visible_reply.text
 
 
 async def reply_in_thread(message_id: str, text: str, settings: Settings | None = None) -> ReplyResult:

@@ -64,6 +64,8 @@ async def run_turn(agent, settings, session: SQLiteSession, user_input: str) -> 
         request = SupportCaseRequest(
             request_id=f"terminal:{short_hash(user_input)}",
             source="terminal",
+            channel="terminal",
+            source_platform="terminal",
             user_text=user_input,
             trace_group_id="terminal-chat",
         )

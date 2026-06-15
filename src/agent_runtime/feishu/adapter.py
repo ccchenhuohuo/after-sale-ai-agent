@@ -17,6 +17,8 @@ def build_support_case_request_from_event(event: FeishuMessageEvent, settings: S
     return SupportCaseRequest(
         request_id=f"feishu:{short_hash(event.message_id or event.event_id)}",
         source="feishu",
+        channel="legacy_feishu",
+        source_platform="feishu",
         user_text=user_text,
         assets=extract_assets_from_event(event),
         chat_id=event.chat_id,

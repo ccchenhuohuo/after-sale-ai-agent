@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from agent_runtime.copilot.answer_contract import FEISHU_VISIBLE_REPLY_FALLBACK
+from agent_runtime.channels.feishu_reply import render_feishu_visible_runtime_reply
 from agent_runtime.copilot.runtime import SupportRuntimeResult
 
 
@@ -14,7 +14,7 @@ MARKDOWN_CODE_FENCE_RE = re.compile(r"```(?:[a-zA-Z0-9_-]+)?\n?|\n?```")
 
 
 def build_openclaw_thread_reply(result: SupportRuntimeResult) -> dict[str, Any]:
-    text = FEISHU_VISIBLE_REPLY_FALLBACK if result.blocked else result.visible_text
+    visible_reply = render_feishu_visible_runtime_reply(result)
     request = result.request
     return {
         "channel": "feishu",
@@ -24,13 +24,15 @@ def build_openclaw_thread_reply(result: SupportRuntimeResult) -> dict[str, Any]:
         "replyToMessageId": request.message_id,
         "replyInThread": True,
         "preferredFormat": "post",
-        "text": text,
-        "fallbackText": readable_plain_text(text),
+        "text": visible_reply.safe_text,
+        "fallbackText": readable_plain_text(visible_reply.safe_text),
         "metadata": {
             "source": "support_copilot",
             "requestId": request.request_id,
             "recommendedAction": result.coverage.recommended_action,
             "mentionEnabled": False,
+            "blocked": visible_reply.blocked,
+            "issueCodes": [issue.code for issue in visible_reply.issues],
         },
     }
 

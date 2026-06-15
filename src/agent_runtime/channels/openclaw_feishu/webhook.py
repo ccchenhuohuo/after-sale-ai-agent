@@ -35,7 +35,6 @@ async def openclaw_feishu_support_case(
         entrypoint="openclaw_feishu",
         source_label="OpenClaw 飞书客服话题群",
         session=session,
-        render_visible_reply=True,
     )
     return build_openclaw_thread_reply(result)
 

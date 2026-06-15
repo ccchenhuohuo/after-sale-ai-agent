@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     feishu_bot_loop_max_turns: int = 3
     feishu_dedup_ttl_seconds: int = 43200
     feishu_dedup_max_items: int = 5000
+    feishu_media_auto_accept_enabled: bool = False
 
     support_agent_trigger_prefix: str = "AI分析："
     support_agent_sync_mode: bool = False

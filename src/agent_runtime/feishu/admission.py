@@ -8,6 +8,9 @@ from agent_runtime.feishu.runtime_store import RuntimeStore
 from agent_runtime.settings import Settings
 
 
+MEDIA_MESSAGE_TYPES = {"image", "video", "file", "audio"}
+
+
 @dataclass(frozen=True)
 class BotIdentity:
     app_id: str = ""
@@ -64,6 +67,8 @@ def should_accept(
 
     if _mentions_bot(event, settings, bot_identity):
         return GateResult(True, "accepted")
+    if _media_auto_accept(event, settings):
+        return GateResult(True, "accepted_media")
     return GateResult(False, "ignored")
 
 
@@ -100,3 +105,12 @@ def _mentions_bot(event: FeishuMessageEvent, settings: Settings, bot_identity: B
 
     mention_names = tuple(name for name in names if name)
     return should_trigger_ai(event.content, settings.support_agent_trigger_prefix, mention_names)
+
+
+def _media_auto_accept(event: FeishuMessageEvent, settings: Settings) -> bool:
+    if not settings.feishu_media_auto_accept_enabled:
+        return False
+    if event.message_type not in MEDIA_MESSAGE_TYPES:
+        return False
+    allowed_chat_ids = split_csv(settings.feishu_support_group_chat_id)
+    return bool(allowed_chat_ids and event.chat_id in allowed_chat_ids)

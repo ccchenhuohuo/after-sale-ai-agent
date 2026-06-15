@@ -290,6 +290,38 @@ def test_should_handle_event_allows_prefix_trigger():
     assert should_handle_event(event, settings)
 
 
+def test_should_handle_event_accepts_media_only_when_enabled_for_target_group():
+    event = FeishuMessageEvent(
+        event_id="evt_image",
+        chat_id="oc_target",
+        chat_type="group",
+        message_id="om_image",
+        message_type="image",
+        sender_id="ou_sender",
+        content="",
+        raw_content='{"image_key":"img_v3_abc"}',
+    )
+
+    disabled = Settings(
+        feishu_support_group_chat_id="oc_target",
+        feishu_media_auto_accept_enabled=False,
+    )
+    enabled = Settings(
+        feishu_support_group_chat_id="oc_target",
+        feishu_media_auto_accept_enabled=True,
+    )
+    enabled_without_whitelist = Settings(feishu_media_auto_accept_enabled=True)
+    enabled_other_group = Settings(
+        feishu_support_group_chat_id="oc_other",
+        feishu_media_auto_accept_enabled=True,
+    )
+
+    assert not should_handle_event(event, disabled)
+    assert should_handle_event(event, enabled)
+    assert not should_handle_event(event, enabled_without_whitelist)
+    assert not should_handle_event(event, enabled_other_group)
+
+
 def test_should_handle_event_allows_comma_separated_target_groups():
     settings = Settings(
         feishu_support_group_chat_id="oc_other, oc_target",

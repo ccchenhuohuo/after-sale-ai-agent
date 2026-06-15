@@ -35,6 +35,8 @@ flowchart TB
 - 新 IM 平台通过独立 `channels/<platform>/adapter.py` / `responder.py` 接入同一个 Core Runtime，不复制 Agent 编排。
 - Legacy 飞书链路只使用官方 Python SDK，不依赖额外命令行桥接工具。
 - 飞书事件只处理白名单话题群内真实用户 @ 机器人后的文本消息。
+- legacy 飞书链路默认不响应纯图片/视频/文件消息；如需在测试群验证图片-only intake，必须同时配置
+  `FEISHU_SUPPORT_GROUP_CHAT_ID` 和 `FEISHU_MEDIA_AUTO_ACCEPT_ENABLED=true`，避免机器人在非白名单群里响应任意媒体消息。
 - 飞书回复强制使用 `im.v1.message.areply` 的 `reply_in_thread=true`，不会 fallback 到主群新消息。
 - 启动面板展示项目名称、版本、当前模型、计费模式和项目路径。
 - 输入状态只保留上下文数量和当前模型。

@@ -13,6 +13,7 @@ from agent_runtime.copilot.runtime import build_support_runtime_session, run_sup
 from agent_runtime.channels.feishu_reply import render_feishu_visible_runtime_reply
 from agent_runtime.feishu.adapter import build_feishu_user_text, build_support_case_request_from_event
 from agent_runtime.feishu.admission import BotIdentity, should_accept
+from agent_runtime.feishu.assets import download_feishu_assets_for_request
 from agent_runtime.feishu.events import (
     FeishuMessageEvent,
     effective_thread_id,
@@ -87,6 +88,7 @@ def build_feishu_user_input(event: FeishuMessageEvent, settings: Settings) -> st
 async def run_support_agent_for_event(event: FeishuMessageEvent, settings: Settings | None = None) -> str:
     settings = configure_agents_runtime(settings or get_settings())
     request = build_support_case_request_from_event(event, settings)
+    request = await download_feishu_assets_for_request(request, settings)
     thread_id = effective_thread_id(event)
     session = build_support_runtime_session(settings, session_id_for_event(event))
     runtime_result = await run_support_case_request(

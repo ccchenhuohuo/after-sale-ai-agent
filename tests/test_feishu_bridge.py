@@ -4,13 +4,17 @@ import sqlite3
 from types import SimpleNamespace
 
 import pytest
+import httpx
 from fastapi import HTTPException
 
 import agent_runtime.copilot.runtime as support_runtime
+import agent_runtime.feishu.assets as feishu_assets
 import agent_runtime.feishu.bridge as bridge
 from agent_runtime.copilot.answer_contract import FEISHU_VISIBLE_REPLY_FALLBACK, SupportAnswer
+from agent_runtime.copilot.case_context import SupportAsset, SupportCaseRequest
 from agent_runtime.feishu.admission import BotIdentity, should_accept
 from agent_runtime.feishu.adapter import build_support_case_request_from_event
+from agent_runtime.feishu.assets import download_feishu_assets_for_request
 from agent_runtime.feishu.bridge import (
     FeishuMessageEvent,
     build_feishu_user_input,
@@ -218,6 +222,171 @@ def test_feishu_adapter_converts_video_message_to_support_asset(tmp_path):
     assert len(request.assets) == 1
     assert request.assets[0].media_type == "video"
     assert request.assets[0].file_key == "video_v3_abc"
+
+
+def test_feishu_asset_downloader_sets_local_path(monkeypatch, tmp_path):
+    captured = {}
+
+    async def fake_token(settings):
+        return "tenant-token"
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, *, params=None, headers=None):
+            captured["url"] = url
+            captured["params"] = params
+            captured["headers"] = headers
+            return httpx.Response(
+                200,
+                content=b"fake-png",
+                headers={"content-type": "image/png"},
+                request=httpx.Request("GET", url),
+            )
+
+    monkeypatch.setattr(feishu_assets, "get_tenant_access_token", fake_token)
+    monkeypatch.setattr(feishu_assets.httpx, "AsyncClient", FakeClient)
+    settings = settings_for_tmp(tmp_path, feishu_asset_cache_dir=str(tmp_path / "assets"))
+    request = SupportCaseRequest(
+        request_id="case_1",
+        source="feishu",
+        assets=[
+            SupportAsset(
+                asset_id="asset_1",
+                media_type="image",
+                file_key="img_v3_abc",
+                message_id="om_img",
+            )
+        ],
+    )
+
+    enriched = asyncio.run(download_feishu_assets_for_request(request, settings))
+
+    asset = enriched.assets[0]
+    assert asset.local_path.endswith("img_v3_abc.png")
+    assert (tmp_path / "assets" / "om_img" / "img_v3_abc.png").read_bytes() == b"fake-png"
+    assert asset.mime_type == "image/png"
+    assert asset.metadata["download_status"] == "ok"
+    assert captured["params"] == {"type": "image"}
+    assert captured["headers"] == {"Authorization": "Bearer tenant-token"}
+
+
+def test_feishu_asset_downloader_failure_stays_non_blocking(monkeypatch, tmp_path):
+    async def fake_token(settings):
+        return "tenant-token"
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, *, params=None, headers=None):
+            return httpx.Response(
+                200,
+                json={"code": 234002, "msg": "no permission"},
+                headers={"content-type": "application/json"},
+            )
+
+    monkeypatch.setattr(feishu_assets, "get_tenant_access_token", fake_token)
+    monkeypatch.setattr(feishu_assets.httpx, "AsyncClient", FakeClient)
+    settings = settings_for_tmp(tmp_path, feishu_asset_cache_dir=str(tmp_path / "assets"))
+    request = SupportCaseRequest(
+        request_id="case_1",
+        source="feishu",
+        assets=[
+            SupportAsset(
+                asset_id="asset_1",
+                media_type="image",
+                file_key="img_v3_abc",
+                message_id="om_img",
+            )
+        ],
+    )
+
+    enriched = asyncio.run(download_feishu_assets_for_request(request, settings))
+
+    asset = enriched.assets[0]
+    assert asset.local_path == ""
+    assert asset.metadata["download_status"] == "error"
+    assert "234002" in asset.metadata["download_error"]
+
+
+def test_feishu_agent_downloads_assets_before_core_runtime(monkeypatch, tmp_path):
+    settings = settings_for_tmp(tmp_path, llm_api_key="test-key")
+    captured = {}
+
+    async def fake_download(request, settings):
+        captured["download_seen_assets"] = [asset.file_key for asset in request.assets]
+        return request.model_copy(
+            update={
+                "assets": [
+                    request.assets[0].model_copy(
+                        update={
+                            "local_path": str(tmp_path / "downloaded.png"),
+                            "metadata": {**request.assets[0].metadata, "download_status": "ok"},
+                        }
+                    )
+                ]
+            }
+        )
+
+    async def fake_runtime(request, settings, **kwargs):
+        captured["runtime_asset_local_path"] = request.assets[0].local_path
+        captured["runtime_download_status"] = request.assets[0].metadata["download_status"]
+        return SimpleNamespace(
+            contract_issues=[],
+            answer=SupportAnswer(
+                issue_type="unknown",
+                run_mode="Agent SDK",
+                confidence="低",
+                confidence_reason="未查询到可信正式依据。",
+                user_issue_summary="客户发送图片，需要补充文字说明。",
+                sku_match="未在 SKU 目录中命中；需要补充订单 SKU、包装 SKU、产品铭牌或图片。",
+                suggested_reply="已收到图片，建议先补充产品型号、故障现象和订单信息，方便进一步确认。",
+                troubleshooting_steps=["补充产品型号", "说明故障现象"],
+                follow_up_questions=["请补充 SKU 或订单号"],
+                official_evidence="未查询到可信正式依据，不可编造。",
+                history_reference="未查询到可信历史参考，不可编造。",
+                ticket_draft="不建议生成工单，并说明原因。",
+            ),
+        )
+
+    monkeypatch.setattr(bridge, "configure_agents_runtime", lambda settings: settings)
+    monkeypatch.setattr(bridge, "download_feishu_assets_for_request", fake_download)
+    monkeypatch.setattr(bridge, "run_support_case_request", fake_runtime)
+    event = FeishuMessageEvent(
+        event_id="evt_img",
+        chat_id="oc_target",
+        chat_type="group",
+        message_id="om_img",
+        message_type="image",
+        sender_id="ou_sender",
+        content="@飞书 CLI 看下这个截图",
+        mention_names=("飞书 CLI",),
+        thread_id="omt_thread",
+        raw_content='{"image_key":"img_v3_abc","file_name":"chat_screenshot.png"}',
+    )
+
+    reply = asyncio.run(bridge.run_support_agent_for_event(event, settings))
+
+    assert captured == {
+        "download_seen_assets": ["img_v3_abc"],
+        "runtime_asset_local_path": str(tmp_path / "downloaded.png"),
+        "runtime_download_status": "ok",
+    }
+    assert "客服可以先这样回应客户" in reply
 
 
 def test_should_handle_event_requires_target_group_and_trigger():

@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     feishu_dedup_ttl_seconds: int = 43200
     feishu_dedup_max_items: int = 5000
     feishu_media_auto_accept_enabled: bool = False
+    feishu_asset_download_enabled: bool = True
+    feishu_asset_cache_dir: str = "data/feishu_runtime/assets"
+    feishu_asset_download_max_bytes: int = 25_000_000
 
     support_agent_trigger_prefix: str = "AI分析："
     support_agent_sync_mode: bool = False

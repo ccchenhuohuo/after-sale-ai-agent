@@ -2,7 +2,9 @@ import asyncio
 
 import httpx
 
+import agent_runtime.copilot.ingestion as ingestion
 import agent_runtime.copilot.ocr as ocr
+from agent_runtime.copilot.video_sampling import VideoSamplingResult
 from agent_runtime.copilot.case_context import SupportAsset, SupportCaseRequest
 from agent_runtime.copilot.context_assembly import build_data_source_coverage
 from agent_runtime.copilot.evidence import HistoryEvidence, MediaEvidence, OfficialKbEvidence, SkuEvidence, SupportEvidencePack
@@ -222,6 +224,68 @@ def test_video_routes_to_sampling_and_visual_embedding_refs():
     assert decision.requires_visual_embedding is True
     assert result.context.vector_refs == ["vec_video_001"]
     assert any(artifact.artifact_type == "video_sampling" and artifact.status == "ok" for artifact in result.artifacts)
+
+
+def test_local_video_sampling_records_frame_refs_without_prompt_leak(monkeypatch, tmp_path):
+    video_path = tmp_path / "fault.mp4"
+    video_path.write_bytes(b"fake-video")
+    frame_path = tmp_path / "frames" / "frame_001.jpg"
+
+    def fake_sample(video_path_arg, asset_id, settings):
+        assert video_path_arg == str(video_path)
+        assert asset_id == "video_fault"
+        return VideoSamplingResult(status="ok", frame_paths=[str(frame_path)])
+
+    monkeypatch.setattr(ingestion, "sample_video_frames", fake_sample)
+    request = SupportCaseRequest(
+        request_id="case_video",
+        source="feishu",
+        assets=[
+            SupportAsset(
+                asset_id="video_fault",
+                media_type="video",
+                filename="fault.mp4",
+                local_path=str(video_path),
+            )
+        ],
+    )
+
+    result = asyncio.run(build_support_case_context(request, Settings()))
+
+    artifact = next(artifact for artifact in result.artifacts if artifact.artifact_type == "video_sampling")
+    assert artifact.status == "ok"
+    assert artifact.metadata["frame_paths"] == [str(frame_path)]
+    assert "已从视频中采样 1 张关键帧" in result.context.normalized_query
+    assert str(frame_path) not in result.context.model_dump_json()
+
+
+def test_video_sampling_unavailable_records_missing_information(monkeypatch, tmp_path):
+    video_path = tmp_path / "fault.mp4"
+    video_path.write_bytes(b"fake-video")
+
+    def fake_sample(video_path_arg, asset_id, settings):
+        return VideoSamplingResult(status="unsupported", error="ffmpeg not found")
+
+    monkeypatch.setattr(ingestion, "sample_video_frames", fake_sample)
+    request = SupportCaseRequest(
+        request_id="case_video",
+        source="feishu",
+        assets=[
+            SupportAsset(
+                asset_id="video_fault",
+                media_type="video",
+                filename="fault.mp4",
+                local_path=str(video_path),
+            )
+        ],
+    )
+
+    result = asyncio.run(build_support_case_context(request, Settings()))
+
+    artifact = next(artifact for artifact in result.artifacts if artifact.artifact_type == "video_sampling")
+    assert artifact.status == "unsupported"
+    assert "ffmpeg not found" in artifact.summary
+    assert "图片/视频视觉语义结果暂未生成。" in result.context.missing_information
 
 
 def test_unsupported_ingestion_records_missing_information_without_crashing():

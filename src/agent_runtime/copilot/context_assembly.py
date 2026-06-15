@@ -98,7 +98,13 @@ def deterministic_assemble_unified_case_context(
     artifacts: list[IngestionArtifact],
 ) -> UnifiedCaseContext:
     text_parts = [artifact.text for artifact in artifacts if artifact.status == "ok" and artifact.text]
-    visual_summaries = [artifact.summary for artifact in artifacts if artifact.status == "ok" and artifact.vector_id]
+    visual_summaries = [
+        artifact.summary
+        for artifact in artifacts
+        if artifact.status == "ok"
+        and artifact.summary
+        and (artifact.vector_id or artifact.artifact_type in {"video_sampling", "visual_summary"})
+    ]
     vector_refs = [artifact.vector_id for artifact in artifacts if artifact.status == "ok" and artifact.vector_id]
     asset_refs = [asset.asset_id for asset in request.assets]
     normalized_query = _normalize_query([request.user_text, *text_parts, *visual_summaries])

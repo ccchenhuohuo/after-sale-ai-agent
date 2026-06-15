@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     support_ocr_base_url: str = ""
     support_ocr_timeout_seconds: float = 60.0
     support_ocr_image_max_bytes: int = 7_000_000
+    support_video_sampling_enabled: bool = True
+    support_video_sample_dir: str = "data/feishu_runtime/video_samples"
+    support_video_sample_count: int = 3
+    support_video_sample_interval_seconds: float = 3.0
+    support_video_sample_timeout_seconds: float = 30.0
+    support_video_ffmpeg_path: str = ""
     support_vector_index_namespace: str = "after_sales_v1"
     support_vector_artifact_dir: str = "data/feishu_runtime/vector_artifacts"
     openclaw_sidecar_version: str = "2026.6.6"

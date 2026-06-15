@@ -17,6 +17,7 @@ from agent_runtime.copilot.case_context import (
 )
 from agent_runtime.copilot.evidence import short_hash
 from agent_runtime.copilot.ocr import extract_ocr_text
+from agent_runtime.copilot.video_sampling import sample_video_frames
 from agent_runtime.settings import Settings
 from agent_runtime.tools.media_rag import _bailian_vl_embedding
 
@@ -263,13 +264,57 @@ def _ingest_video_sampling(
             model_name=settings.media_rag_embedding_model,
             metadata={"asset_role": decision.asset_role},
         )
+    video_input = asset.local_path or asset.url
+    if not video_input:
+        return IngestionArtifact(
+            artifact_id=f"video:{asset.asset_id}:missing-input",
+            artifact_type="video_sampling",
+            status="unsupported",
+            asset_id=asset.asset_id,
+            summary="附件缺少可用于视频采样的本地文件或 URL。",
+            model_name="ffmpeg",
+            metadata={"asset_role": decision.asset_role},
+        )
+    sampling = sample_video_frames(video_input, asset.asset_id, settings)
+    if sampling.status == "ok":
+        frame_count = len(sampling.frame_paths)
+        return IngestionArtifact(
+            artifact_id=f"video:{asset.asset_id}:{short_hash('|'.join(sampling.frame_paths))}",
+            artifact_type="video_sampling",
+            status="ok",
+            asset_id=asset.asset_id,
+            summary=f"已从视频中采样 {frame_count} 张关键帧，供视觉检索或人工复核使用。",
+            model_name=sampling.model_name,
+            metadata={"asset_role": decision.asset_role, "frame_paths": sampling.frame_paths, "frame_count": frame_count},
+        )
+    if sampling.status == "empty":
+        return IngestionArtifact(
+            artifact_id=f"video:{asset.asset_id}:empty",
+            artifact_type="video_sampling",
+            status="empty",
+            asset_id=asset.asset_id,
+            summary="视频采样未生成可用关键帧。",
+            model_name=sampling.model_name,
+            metadata={"asset_role": decision.asset_role},
+        )
+    if sampling.status == "error":
+        return IngestionArtifact(
+            artifact_id=f"video:{asset.asset_id}:error",
+            artifact_type="video_sampling",
+            status="error",
+            asset_id=asset.asset_id,
+            summary="视频采样失败。",
+            model_name=sampling.model_name,
+            error=sampling.error,
+            metadata={"asset_role": decision.asset_role},
+        )
     return IngestionArtifact(
         artifact_id=f"video:{asset.asset_id}:unsupported",
         artifact_type="video_sampling",
         status="unsupported",
         asset_id=asset.asset_id,
-        summary="视频采样接口已预留，但当前未完成可用的视频解析实现。",
-        model_name=settings.media_rag_embedding_model,
+        summary=sampling.error or "视频采样不可用。",
+        model_name=sampling.model_name,
         metadata={"asset_role": decision.asset_role},
     )
 

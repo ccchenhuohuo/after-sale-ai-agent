@@ -41,6 +41,8 @@ def test_prompt_keeps_terminal_answer_contract():
     assert "输出必须符合 SupportAnswer 结构化 schema" in SUPPORT_COPILOT_INSTRUCTIONS
     assert "SKU 精确命中只能说明产品识别可靠" in SUPPORT_COPILOT_INSTRUCTIONS
     assert "整体置信度必须为低" in SUPPORT_COPILOT_INSTRUCTIONS
+    assert "安排技术人员处理" in SUPPORT_COPILOT_INSTRUCTIONS
+    assert "客服可先补充信息并提交人工复核" in SUPPORT_COPILOT_INSTRUCTIONS
 
 
 def test_agent_uses_structured_output_without_retrieval_tools():

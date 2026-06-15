@@ -153,6 +153,20 @@ def test_negated_commitment_synonym_is_not_reported():
     assert not any(issue.code == "forbidden_commitment" for issue in issues)
 
 
+def test_negated_direct_commitment_is_not_reported_but_arranged_processing_is():
+    negated = VALID_EMPTY_EVIDENCE_ANSWER.replace(
+        "建议先收集信息并人工确认。",
+        "当前无法直接承诺退款或换新，需要人工复核。",
+    )
+    arranged = VALID_EMPTY_EVIDENCE_ANSWER.replace(
+        "建议先收集信息并人工确认。",
+        "我们将进一步核实并安排技术人员处理。",
+    )
+
+    assert not any(issue.code == "forbidden_commitment" for issue in validate_answer_contract(negated))
+    assert any(issue.code == "forbidden_commitment" for issue in validate_answer_contract(arranged))
+
+
 def test_support_answer_renders_existing_customer_service_format():
     answer = SupportAnswer(
         issue_type="troubleshooting",

@@ -53,7 +53,18 @@ FORBIDDEN_COMMITMENT_REGEX_PATTERNS = [
     re.compile(r"(?:已|已经)?[^。；，,\n]{0,4}(?:转交|提交|升级|安排|反馈)[^。；，,\n]{0,20}(?:跟进|处理|回复|答复|解决|核实)"),
 ]
 
-NEGATED_COMMITMENT_PREFIXES = ["不要", "不能", "不可", "不得", "不建议", "未获得正式政策依据前，不要"]
+NEGATED_COMMITMENT_PREFIXES = [
+    "不要",
+    "不能",
+    "不可",
+    "不得",
+    "不建议",
+    "无法",
+    "不能直接",
+    "不可直接",
+    "暂不",
+    "未获得正式政策依据前，不要",
+]
 
 FEISHU_VISIBLE_INTERNAL_PATTERNS = [
     re.compile(rf"{re.escape(field)}[：:]", re.IGNORECASE) for field in ANSWER_FIELDS

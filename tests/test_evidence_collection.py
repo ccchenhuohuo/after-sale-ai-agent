@@ -328,3 +328,27 @@ def test_agent_prompt_redacts_case_context_internal_refs():
     assert "引用哈希" in prompt
     assert "[redacted-path]" in prompt
     assert "[redacted-url]" in prompt
+
+
+def test_agent_prompt_redacts_raw_issue_internal_refs():
+    prompt = build_agent_input(
+        (
+            "客户原文包含 https://internal.example/file "
+            "/opt/agent-runtime/private/a.jpg "
+            "file_key=img_secret_123456 "
+            "vector_id=vec_secret_abcdef "
+            "embedding=[0.123456, 0.654321]"
+        ),
+        source="飞书客服群",
+    )
+
+    assert "https://internal.example" not in prompt
+    assert "/opt/agent-runtime" not in prompt
+    assert "img_secret_123456" not in prompt
+    assert "vec_secret_abcdef" not in prompt
+    assert "0.123456" not in prompt
+    assert "[redacted-url]" in prompt
+    assert "[redacted-path]" in prompt
+    assert "[redacted-file-key]" in prompt
+    assert "[redacted-vector-ref]" in prompt
+    assert "[redacted-vector]" in prompt

@@ -3,6 +3,7 @@ from __future__ import annotations
 from agent_runtime.copilot.case_context import DataSourceCoverage, UnifiedCaseContext
 from agent_runtime.copilot.context_assembly import render_case_context_for_prompt
 from agent_runtime.copilot.evidence import SupportEvidencePack, render_evidence_pack
+from agent_runtime.copilot.reference_safety import redact_internal_references
 
 
 SUPPORT_COPILOT_INSTRUCTIONS = """
@@ -63,6 +64,8 @@ def build_agent_input(
     case_context: UnifiedCaseContext | None = None,
     coverage: DataSourceCoverage | None = None,
 ) -> str:
+    issue_text = redact_internal_references(raw_issue.strip())
+    source_text = redact_internal_references(source)
     evidence_text = render_evidence_pack(evidence_pack) if evidence_pack is not None else "结构化证据包：未提供。"
     context_text = (
         render_case_context_for_prompt(case_context, coverage)
@@ -70,10 +73,10 @@ def build_agent_input(
         else "统一售后上下文：未提供，按原始客户问题分析。"
     )
     return f"""客户问题：
-{raw_issue.strip()}
+{issue_text}
 
 上下文：
-来自{source}，当前结果只供内部客服参考。
+来自{source_text}，当前结果只供内部客服参考。
 
 {context_text}
 

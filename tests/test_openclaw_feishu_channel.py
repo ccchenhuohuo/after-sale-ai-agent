@@ -376,6 +376,19 @@ def test_openclaw_health_reports_channel_without_runtime_configuration(monkeypat
     assert configured is False
 
 
+def test_openclaw_health_reports_open_message_endpoint_when_secret_unset(monkeypatch):
+    monkeypatch.setattr(openclaw_webhook, "get_settings", lambda: Settings())
+
+    health = asyncio.run(openclaw_webhook.openclaw_feishu_health())
+
+    assert health == {
+        "ok": True,
+        "channel": "openclaw_feishu",
+        "runtime": "support_copilot",
+        "requiresSecret": False,
+    }
+
+
 def test_openclaw_webhook_returns_thread_reply_payload(monkeypatch):
     captured = {}
 

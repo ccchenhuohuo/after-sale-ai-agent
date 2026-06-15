@@ -43,6 +43,31 @@ def settings_for_tmp(tmp_path, **overrides):
     return Settings(**values)
 
 
+class FakeStreamResponse:
+    def __init__(self, status_code=200, *, chunks=(), headers=None):
+        self.status_code = status_code
+        self._chunks = list(chunks)
+        self.headers = headers or {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                "error",
+                request=httpx.Request("GET", "https://open.feishu.cn"),
+                response=httpx.Response(self.status_code),
+            )
+
+    async def aiter_bytes(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
 def test_challenge_response_supports_v2_url_verification():
     payload = {
         "schema": "2.0",
@@ -240,16 +265,12 @@ def test_feishu_asset_downloader_sets_local_path(monkeypatch, tmp_path):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def get(self, url, *, params=None, headers=None):
+        def stream(self, method, url, *, params=None, headers=None):
+            captured["method"] = method
             captured["url"] = url
             captured["params"] = params
             captured["headers"] = headers
-            return httpx.Response(
-                200,
-                content=b"fake-png",
-                headers={"content-type": "image/png"},
-                request=httpx.Request("GET", url),
-            )
+            return FakeStreamResponse(200, chunks=[b"fake-png"], headers={"content-type": "image/png"})
 
     monkeypatch.setattr(feishu_assets, "get_tenant_access_token", fake_token)
     monkeypatch.setattr(feishu_assets.httpx, "AsyncClient", FakeClient)
@@ -274,6 +295,7 @@ def test_feishu_asset_downloader_sets_local_path(monkeypatch, tmp_path):
     assert (tmp_path / "assets" / "om_img" / "img_v3_abc.png").read_bytes() == b"fake-png"
     assert asset.mime_type == "image/png"
     assert asset.metadata["download_status"] == "ok"
+    assert captured["method"] == "GET"
     assert captured["params"] == {"type": "image"}
     assert captured["headers"] == {"Authorization": "Bearer tenant-token"}
 
@@ -292,10 +314,10 @@ def test_feishu_asset_downloader_failure_stays_non_blocking(monkeypatch, tmp_pat
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def get(self, url, *, params=None, headers=None):
-            return httpx.Response(
+        def stream(self, method, url, *, params=None, headers=None):
+            return FakeStreamResponse(
                 200,
-                json={"code": 234002, "msg": "no permission"},
+                chunks=[b'{"code": 234002, "msg": "no permission"}'],
                 headers={"content-type": "application/json"},
             )
 
@@ -321,6 +343,56 @@ def test_feishu_asset_downloader_failure_stays_non_blocking(monkeypatch, tmp_pat
     assert asset.local_path == ""
     assert asset.metadata["download_status"] == "error"
     assert "234002" in asset.metadata["download_error"]
+
+
+def test_feishu_asset_downloader_stops_stream_when_resource_is_too_large(monkeypatch, tmp_path):
+    async def fake_token(settings):
+        return "tenant-token"
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, method, url, *, params=None, headers=None):
+            return FakeStreamResponse(
+                200,
+                chunks=[b"12345", b"67890"],
+                headers={"content-type": "image/png"},
+            )
+
+    monkeypatch.setattr(feishu_assets, "get_tenant_access_token", fake_token)
+    monkeypatch.setattr(feishu_assets.httpx, "AsyncClient", FakeClient)
+    settings = settings_for_tmp(
+        tmp_path,
+        feishu_asset_cache_dir=str(tmp_path / "assets"),
+        feishu_asset_download_max_bytes=5,
+    )
+    request = SupportCaseRequest(
+        request_id="case_1",
+        source="feishu",
+        assets=[
+            SupportAsset(
+                asset_id="asset_1",
+                media_type="image",
+                file_key="img_v3_abc",
+                message_id="om_img",
+            )
+        ],
+    )
+
+    enriched = asyncio.run(download_feishu_assets_for_request(request, settings))
+
+    asset = enriched.assets[0]
+    assert asset.local_path == ""
+    assert asset.metadata["download_status"] == "error"
+    assert "FEISHU_ASSET_DOWNLOAD_MAX_BYTES" in asset.metadata["download_error"]
+    assert not (tmp_path / "assets" / "om_img" / "img_v3_abc.png").exists()
 
 
 def test_feishu_agent_downloads_assets_before_core_runtime(monkeypatch, tmp_path):

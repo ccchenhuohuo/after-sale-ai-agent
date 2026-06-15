@@ -31,6 +31,7 @@ flowchart TB
 
 - 终端和 legacy 飞书 SDK 长连接是当前稳定交互入口。
 - OpenClaw Feishu sidecar path 已提供 compatibility endpoint 和 contract smoke，用于下一阶段替代 legacy 飞书通道；真实飞书群 E2E 需要凭证环境验证。
+- OpenClaw Feishu 消息入口默认开放处理；`OPENCLAW_FEISHU_BRIDGE_SECRET` 仅作为可选额外 header 校验，不是飞书消息处理的必要条件。
 - Core Support Runtime 只消费 `SupportCaseRequest` 并输出 `SupportRuntimeResult`，不 import 飞书 SDK、OpenClaw 或 channel 模块。
 - 新 IM 平台通过独立 `channels/<platform>/adapter.py` / `responder.py` 接入同一个 Core Runtime，不复制 Agent 编排。
 - Legacy 飞书链路只使用官方 Python SDK，不依赖额外命令行桥接工具。
@@ -46,6 +47,8 @@ flowchart TB
 - 正式知识库工具当前返回明确的“未查询到可信正式依据”。
 - `search_issue_history` 已接入飞书 raw JSON 历史话题 RAG，但只作为未审核历史参考，不能作为正式依据、政策依据或客户承诺依据。
 - 当前 v2 loop 由 runtime 先构造 `SupportCaseRequest`，经过 intake route、ingestion artifact 和 `UnifiedCaseContext` 后，再调用 `collect_support_evidence()` 并发收集 SKU、正式依据、历史参考和媒体观察证据，最后把统一上下文、数据源覆盖和结构化证据包交给 Agent 生成 `SupportAnswer`。
+- 附件进入 OCR、视觉 embedding 或 ffmpeg 前必须通过本地目录/URL host 白名单校验。默认只信任 legacy 飞书下载缓存；OpenClaw sidecar 的下载目录需要通过 `SUPPORT_ASSET_ALLOWED_LOCAL_DIRS` 显式加入。
+- v1 会生成并引用输入图片的 `vector_id`，但多模态 vector retrieval 尚未接入；当前检索仍主要基于 `UnifiedCaseContext.normalized_query`。
 - Agent 最终输出经过 SDK output guardrail 和本地答案 contract 校验；终端保留中文 11 字段调试格式，飞书群可见回复会再渲染成面向客服同事的自然中文。
 - 答案不得编造正式文档、历史案例、链接、负责人、政策或技术结论。
 
@@ -112,6 +115,9 @@ SUPPORT_INTAKE_ROUTER_ENABLED=false
 SUPPORT_CONTEXT_ASSEMBLER_ENABLED=false
 SUPPORT_OCR_PROVIDER=disabled
 SUPPORT_VECTOR_INDEX_NAMESPACE=after_sales_v1
+SUPPORT_ASSET_ALLOWED_LOCAL_DIRS=
+SUPPORT_ASSET_ALLOWED_URL_HOSTS=
+SUPPORT_ASSET_INPUT_MAX_BYTES=25000000
 ```
 
 `LLM_API_KEY` 只用于实际模型调用，例如 DeepSeek 的 OpenAI-compatible endpoint。`OPENAI_TRACING_API_KEY` 只用于向 OpenAI Platform 导出 Agents SDK traces；当使用非 OpenAI 模型且开启 tracing 时，两者应分开配置。

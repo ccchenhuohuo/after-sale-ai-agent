@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import mimetypes
 import re
@@ -78,19 +79,20 @@ async def _download_asset(
         f"/resources/{quote(asset.file_key, safe='')}"
     )
     try:
-        response = await client.get(
+        async with client.stream(
+            "GET",
             url,
             params={"type": resource_type},
             headers={"Authorization": f"Bearer {token}"},
-        )
-        if _is_json_response(response):
-            return _asset_with_download_error(asset, _json_error_message(response))
-        response.raise_for_status()
-        content = response.content
-        if len(content) > settings.feishu_asset_download_max_bytes:
-            return _asset_with_download_error(asset, "resource exceeds FEISHU_ASSET_DOWNLOAD_MAX_BYTES")
-        target_path = target_dir / _download_filename(asset, response.headers.get("content-type", ""))
-        target_path.write_bytes(content)
+        ) as response:
+            if _is_json_response(response):
+                body = await _read_limited_response(response, settings.feishu_asset_download_max_bytes)
+                return _asset_with_download_error(asset, _json_error_message_from_bytes(response, body))
+            response.raise_for_status()
+            target_path = target_dir / _download_filename(asset, response.headers.get("content-type", ""))
+            status = await _write_limited_response(response, target_path, settings.feishu_asset_download_max_bytes)
+            if status:
+                return _asset_with_download_error(asset, status)
     except Exception as exc:
         logger.warning(
             "Failed to download Feishu asset: message_id_hash=%s file_key_hash=%s error=%s",
@@ -167,6 +169,44 @@ def _json_error_message(response: httpx.Response) -> str:
     try:
         payload = response.json()
     except ValueError:
+        return f"Feishu resource API returned JSON status={response.status_code}"
+    code = payload.get("code") if isinstance(payload, dict) else None
+    msg = payload.get("msg") if isinstance(payload, dict) else None
+    return f"Feishu resource API error code={code} msg={msg}"
+
+
+async def _read_limited_response(response: httpx.Response, max_bytes: int) -> bytes:
+    chunks = []
+    size = 0
+    async for chunk in response.aiter_bytes():
+        size += len(chunk)
+        if size > max_bytes:
+            break
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _write_limited_response(response: httpx.Response, target_path: Path, max_bytes: int) -> str:
+    size = 0
+    try:
+        with target_path.open("wb") as handle:
+            async for chunk in response.aiter_bytes():
+                size += len(chunk)
+                if size > max_bytes:
+                    handle.close()
+                    target_path.unlink(missing_ok=True)
+                    return "resource exceeds FEISHU_ASSET_DOWNLOAD_MAX_BYTES"
+                handle.write(chunk)
+    except Exception:
+        target_path.unlink(missing_ok=True)
+        raise
+    return ""
+
+
+def _json_error_message_from_bytes(response: httpx.Response, body: bytes) -> str:
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
         return f"Feishu resource API returned JSON status={response.status_code}"
     code = payload.get("code") if isinstance(payload, dict) else None
     msg = payload.get("msg") if isinstance(payload, dict) else None

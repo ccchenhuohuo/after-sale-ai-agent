@@ -73,7 +73,13 @@ corepack npm run smoke:support-copilot
 Optional environment variables:
 
 - `SUPPORT_COPILOT_URL`: defaults to `http://127.0.0.1:8000/channels/openclaw-feishu/support-case`
-- `OPENCLAW_FEISHU_BRIDGE_SECRET`: sends the `x-openclaw-feishu-secret` header when configured
+- `OPENCLAW_FEISHU_BRIDGE_SECRET`: sends the `x-openclaw-feishu-secret` header when configured. The Python Feishu/OpenClaw message endpoint is intentionally open by default for trusted channel traffic; use this only as an extra local/sidecar guard.
+
+The Python service validates downloaded attachment inputs before OCR, visual
+embedding, or video sampling. If OpenClaw provides local media paths, add the
+sidecar download directory to `SUPPORT_ASSET_ALLOWED_LOCAL_DIRS` in the Python
+service environment. Remote media URLs are rejected unless their HTTPS host is
+listed in `SUPPORT_ASSET_ALLOWED_URL_HOSTS`.
 
 The smoke payload includes a two-message burst with text plus an image resource
 whose download is marked as failed. It sets `contractOnly=true`, so the Python

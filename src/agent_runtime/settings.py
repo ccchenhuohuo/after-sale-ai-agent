@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     support_video_ffmpeg_path: str = ""
     support_vector_index_namespace: str = "after_sales_v1"
     support_vector_artifact_dir: str = "data/feishu_runtime/vector_artifacts"
+    support_asset_allowed_local_dirs: str = ""
+    support_asset_allowed_url_hosts: str = ""
+    support_asset_input_max_bytes: int = 25_000_000
     openclaw_sidecar_version: str = "2026.6.6"
     openclaw_lark_plugin_version: str = "2026.6.10"
     openclaw_feishu_bridge_secret: str = ""

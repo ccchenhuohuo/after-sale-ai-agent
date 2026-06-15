@@ -56,14 +56,15 @@ flowchart TB
 - Core Support Runtime 的边界是 `SupportCaseRequest -> SupportRuntimeResult`。核心售后 pipeline 不 import 飞书 SDK、OpenClaw 或任何 channel 模块。
 - Channel Adapter 的职责是把平台事件、消息和附件转换成 `SupportCaseRequest`；Channel Responder 的职责是把 `SupportRuntimeResult` 转成平台回复。OCR、embedding、检索和 Agent 推理都不是 handoff，也不属于 IM adapter。
 - Legacy Feishu Bridge 保留 admission、dedup、per-thread queue、reply ledger 和 thread reply；飞书 SDK 细节被限制在 legacy adapter/bridge 层。
-- OpenClaw Feishu path 采用 `@larksuite/openclaw-lark` 作为通道能力依赖，本项目只维护薄 compatibility endpoint：OpenClaw message/resource -> `SupportCaseRequest`，`SupportRuntimeResult` -> OpenClaw thread reply payload。
+- OpenClaw Feishu path 采用 `@larksuite/openclaw-lark` 作为通道能力依赖，本项目只维护薄 compatibility endpoint：OpenClaw message/resource -> `SupportCaseRequest`，`SupportRuntimeResult` -> OpenClaw thread reply payload。该消息入口默认开放处理；如果配置 `OPENCLAW_FEISHU_BRIDGE_SECRET`，则兼容额外 header 校验。
 - 后续新增企业微信、微信或 Slack 时，新增 `channels/<platform>/adapter.py` 和 `responder.py` 即可接入同一个 Core Support Runtime，不应复制 Agent 编排代码。
 - 旧的本地确定性分析器和本地演示知识已经移除。
 - 合并后的 SKU 支持目录只用于产品识别和负责人流转，不作为故障依据。
 - 正式文档和历史参考必须分开。
 - 如果正式知识库未接入或没有命中，Agent 必须说明“未查询到可信正式依据”。
 - 飞书 raw JSON 历史话题 RAG 只能作为未审核历史参考；Agent 必须标注“需人工确认”，不能作为正式政策、正式技术结论、最终判责或客户承诺依据。
-- 飞书 raw media 只能作为未审核媒体观察证据；已下载本地图片可进入 `qwen3-vl-embedding` / `qwen3-vl-rerank` 多模态链路，未下载媒体仍只用于定位图片、视频、截图等待核验素材，不能作为正式技术结论。
+- 飞书 raw media 只能作为未审核媒体观察证据；附件进入 OCR、视觉 embedding 或 ffmpeg 前必须通过白名单路径/URL 校验。已下载本地图片可进入 `qwen3-vl-embedding` / `qwen3-vl-rerank` 多模态链路，未下载媒体仍只用于定位图片、视频、截图等待核验素材，不能作为正式技术结论。
+- v1 已生成并保存输入图片的 `vector_id` 引用，但运行时 retrieval 仍主要基于 `UnifiedCaseContext.normalized_query` 检索；输入图片/视频向量尚未直接驱动媒体索引检索，这是阶段性限制。
 - 历史话题 RAG 使用阿里云百炼 API 做 embedding 与 rerank。
 - 现有 `售后问题 AI 闭环库` Base 可以作为未来已审核历史案例卡片的原始材料，但原始消息不能直接作为正式答案依据。
 - `2026AI配置汇总表` 等售前资料只能补充 SKU、基础产品、发票等上下文，不能驱动售后处理决定。

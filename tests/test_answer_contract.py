@@ -1,11 +1,13 @@
 from agent_runtime.copilot.answer_contract import (
     SupportAnswer,
+    apply_data_source_coverage,
     contract_issues_for_output,
     render_feishu_reply,
     render_support_answer,
     validate_answer_contract,
     validate_feishu_visible_reply,
 )
+from agent_runtime.copilot.case_context import DataSourceCoverage, DataSourceCoverageItem
 from agent_runtime.copilot.evidence import HistoryEvidence, SupportEvidencePack
 
 
@@ -46,6 +48,41 @@ SKU 命中：
 工单草稿：
 不建议生成工单，并说明原因。
 """
+
+
+def _answer_with_action(action: str) -> SupportAnswer:
+    return SupportAnswer(
+        issue_type="troubleshooting",
+        run_mode="Agent SDK",
+        confidence="低",
+        confidence_reason="测试覆盖数据源动作上限。",
+        user_issue_summary="客户反馈设备异常。",
+        sku_match="未在 SKU 目录中命中。",
+        suggested_reply="建议先收集信息并人工确认。",
+        troubleshooting_steps=["确认型号"],
+        follow_up_questions=["请补充 SKU"],
+        official_evidence="未查询到可信正式依据，不可编造。",
+        history_reference="未查询到可信历史参考，不可编造。",
+        recommended_action=action,
+        ticket_draft="不建议生成工单，并说明原因。",
+    )
+
+
+def _coverage_with_action(action: str) -> DataSourceCoverage:
+    return DataSourceCoverage(
+        items=[
+            DataSourceCoverageItem(
+                source_id="official_kb",
+                source_name="正式知识库",
+                status="missing",
+                authority="missing",
+            )
+        ],
+        recommended_action=action,
+        owner_candidate="",
+        mention_enabled=False,
+        reason="测试覆盖动作上限。",
+    )
 
 
 def test_valid_empty_evidence_answer_has_no_contract_issues():
@@ -191,6 +228,34 @@ def test_support_answer_renders_existing_customer_service_format():
     assert "建议排查步骤：" in rendered
     assert "1. 确认型号" in rendered
     assert validate_answer_contract(rendered) == []
+
+
+def test_data_source_coverage_caps_model_recommended_action_to_human_review():
+    answer = _answer_with_action("answer")
+    coverage = _coverage_with_action("human_review")
+
+    applied = apply_data_source_coverage(answer, coverage)
+
+    assert applied.recommended_action == "human_review"
+    assert applied.mention_enabled is False
+
+
+def test_data_source_coverage_caps_model_recommended_action_to_ask_clarification():
+    answer = _answer_with_action("answer")
+    coverage = _coverage_with_action("ask_clarification")
+
+    applied = apply_data_source_coverage(answer, coverage)
+
+    assert applied.recommended_action == "ask_clarification"
+
+
+def test_data_source_coverage_keeps_more_conservative_model_action():
+    answer = _answer_with_action("human_review")
+    coverage = _coverage_with_action("answer")
+
+    applied = apply_data_source_coverage(answer, coverage)
+
+    assert applied.recommended_action == "human_review"
 
 
 def test_feishu_visible_reply_renders_natural_text_without_internal_format():

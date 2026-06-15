@@ -8,8 +8,12 @@ real group.
 ## Preconditions
 
 - Python Support Copilot service is running.
-- `OPENCLAW_FEISHU_BRIDGE_SECRET` is configured identically in the Python
-  service and the OpenClaw sidecar environment.
+- `OPENCLAW_FEISHU_BRIDGE_SECRET` is either empty on both sides or configured
+  identically in the Python service and the OpenClaw sidecar environment. The
+  Feishu/OpenClaw message endpoint is intentionally open by default for trusted
+  channel traffic.
+- If OpenClaw forwards local media paths, the sidecar download directory is
+  included in the Python service `SUPPORT_ASSET_ALLOWED_LOCAL_DIRS`.
 - OpenClaw sidecar uses `openclaw@2026.6.6` and
   `@larksuite/openclaw-lark@2026.6.10`.
 - `corepack npm audit --omit=dev --audit-level=high` reports zero high-severity
@@ -29,8 +33,11 @@ curl -s http://127.0.0.1:8000/channels/openclaw-feishu/health
 Expected shape:
 
 ```json
-{"ok":true,"channel":"openclaw_feishu","runtime":"support_copilot","requiresSecret":true}
+{"ok":true,"channel":"openclaw_feishu","runtime":"support_copilot","requiresSecret":false}
 ```
+
+`requiresSecret` is `true` only when `OPENCLAW_FEISHU_BRIDGE_SECRET` is set in
+the Python service.
 
 Then run the local contract smoke:
 

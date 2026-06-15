@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 from agents import custom_span
 
+from agent_runtime.copilot.asset_inputs import AssetInputValidationResult, validate_support_asset_input
 from agent_runtime.copilot.case_context import (
     AssetRouteDecision,
     IngestionArtifact,
@@ -124,14 +125,14 @@ def _ingest_ocr(asset: SupportAsset, decision: AssetRouteDecision, settings: Set
             model_name=settings.support_ocr_provider,
             metadata={"asset_role": decision.asset_role},
         )
-    ocr_input = asset.url or asset.local_path
-    if not ocr_input:
+    ocr_input = validate_support_asset_input(asset, settings, expected_kind="image", allow_url=True)
+    if not ocr_input.ok:
         return IngestionArtifact(
-            artifact_id=f"ocr:{asset.asset_id}:missing-input",
+            artifact_id=f"ocr:{asset.asset_id}:invalid-input",
             artifact_type="ocr",
             status="unsupported",
             asset_id=asset.asset_id,
-            summary="附件缺少可用于 OCR 的 URL 或本地文件。",
+            summary=ocr_input.error or "附件缺少可用于 OCR 的本地文件或白名单 URL。",
             model_name=settings.support_ocr_model,
             metadata={"asset_role": decision.asset_role},
         )
@@ -143,7 +144,7 @@ def _ingest_ocr(asset: SupportAsset, decision: AssetRouteDecision, settings: Set
             "asset_role": decision.asset_role,
         },
     ):
-        result = extract_ocr_text(ocr_input, settings)
+        result = extract_ocr_text(ocr_input.value, settings)
     if result.status == "ok":
         return IngestionArtifact(
             artifact_id=f"ocr:{asset.asset_id}:{short_hash(result.text)}",
@@ -208,7 +209,32 @@ def _ingest_visual_embedding(
             metadata={"asset_role": decision.asset_role},
         )
 
-    content = _visual_content(asset)
+    if asset.media_type == "video":
+        return IngestionArtifact(
+            artifact_id=f"visual:{asset.asset_id}:video-direct-unsupported",
+            artifact_type="image_embedding",
+            status="unsupported",
+            asset_id=asset.asset_id,
+            summary="视频视觉 embedding v1 不直接处理原视频；需等待关键帧向量化能力接入。",
+            model_name=settings.media_rag_embedding_model,
+            index_namespace=settings.support_vector_index_namespace,
+            metadata={"asset_role": decision.asset_role},
+        )
+
+    visual_input = validate_support_asset_input(asset, settings, expected_kind="image", allow_url=True)
+    if not visual_input.ok:
+        return IngestionArtifact(
+            artifact_id=f"visual:{asset.asset_id}:invalid-input",
+            artifact_type="image_embedding",
+            status="unsupported",
+            asset_id=asset.asset_id,
+            summary=visual_input.error or "附件缺少可用于视觉向量化的本地文件或白名单 URL。",
+            model_name=settings.media_rag_embedding_model,
+            index_namespace=settings.support_vector_index_namespace,
+            metadata={"asset_role": decision.asset_role},
+        )
+
+    content = _visual_content(visual_input)
     if content is None:
         return IngestionArtifact(
             artifact_id=f"visual:{asset.asset_id}:unsupported",
@@ -264,18 +290,24 @@ def _ingest_video_sampling(
             model_name=settings.media_rag_embedding_model,
             metadata={"asset_role": decision.asset_role},
         )
-    video_input = asset.local_path or asset.url
-    if not video_input:
+    video_input = validate_support_asset_input(
+        asset,
+        settings,
+        expected_kind="video",
+        allow_url=False,
+        local_only=True,
+    )
+    if not video_input.ok:
         return IngestionArtifact(
-            artifact_id=f"video:{asset.asset_id}:missing-input",
+            artifact_id=f"video:{asset.asset_id}:invalid-input",
             artifact_type="video_sampling",
             status="unsupported",
             asset_id=asset.asset_id,
-            summary="附件缺少可用于视频采样的本地文件或 URL。",
+            summary=video_input.error or "附件缺少可用于视频采样的白名单本地文件。",
             model_name="ffmpeg",
             metadata={"asset_role": decision.asset_role},
         )
-    sampling = sample_video_frames(video_input, asset.asset_id, settings)
+    sampling = sample_video_frames(video_input.value, asset.asset_id, settings)
     if sampling.status == "ok":
         frame_count = len(sampling.frame_paths)
         return IngestionArtifact(
@@ -319,21 +351,12 @@ def _ingest_video_sampling(
     )
 
 
-def _visual_content(asset: SupportAsset) -> dict[str, str] | None:
-    if asset.url:
-        if asset.media_type == "video":
-            return {"video": asset.url}
-        return {"image": asset.url}
-    if not asset.local_path:
+def _visual_content(validation: AssetInputValidationResult) -> dict[str, str] | None:
+    if validation.source_kind == "url":
+        return {"image": validation.value}
+    if validation.source_kind != "local_file" or not validation.value:
         return None
-    path = Path(asset.local_path)
-    if not path.is_absolute():
-        path = ROOT / path
-    if not path.exists():
-        return None
-    if asset.media_type == "video":
-        return {"video": str(path)}
-    return {"image": _image_data_uri(path)}
+    return {"image": _image_data_uri(Path(validation.value))}
 
 
 def _generate_visual_vector(settings: Settings, content: dict[str, str]) -> np.ndarray | None:

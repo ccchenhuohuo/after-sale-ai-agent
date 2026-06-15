@@ -97,6 +97,7 @@ def test_bailian_vl_ocr_reads_local_image_into_context(monkeypatch, tmp_path):
         support_ocr_model="qwen-vl-plus",
         support_ocr_base_url="https://dashscope.test/compatible-mode/v1",
         bailian_api_key="test-key",
+        support_asset_allowed_local_dirs=str(tmp_path),
     )
 
     result = asyncio.run(build_support_case_context(request, settings))
@@ -134,7 +135,11 @@ def test_ocr_provider_failure_records_error_artifact_without_crashing(monkeypatc
             )
         ],
     )
-    settings = Settings(support_ocr_provider="bailian_vl", bailian_api_key="test-key")
+    settings = Settings(
+        support_ocr_provider="bailian_vl",
+        bailian_api_key="test-key",
+        support_asset_allowed_local_dirs=str(tmp_path),
+    )
 
     result = asyncio.run(build_support_case_context(request, settings))
 
@@ -143,6 +148,109 @@ def test_ocr_provider_failure_records_error_artifact_without_crashing(monkeypatc
         for artifact in result.artifacts
     )
     assert "图片文字内容暂未完成 OCR 识别。" in result.context.missing_information
+
+
+def test_ocr_rejects_non_whitelisted_local_path_before_provider_call(monkeypatch, tmp_path):
+    called = False
+
+    def fake_post(url, json, headers, timeout):
+        nonlocal called
+        called = True
+        raise AssertionError("OCR provider should not receive rejected local files")
+
+    monkeypatch.setattr(ocr.httpx, "post", fake_post)
+    request = SupportCaseRequest(
+        request_id="case_rejected_path",
+        source="feishu",
+        assets=[
+            SupportAsset(
+                asset_id="img_chat",
+                media_type="image",
+                filename="chat_screenshot.png",
+                local_path="/etc/passwd",
+            )
+        ],
+    )
+    settings = Settings(
+        support_ocr_provider="bailian_vl",
+        bailian_api_key="test-key",
+        support_asset_allowed_local_dirs=str(tmp_path),
+    )
+
+    result = asyncio.run(build_support_case_context(request, settings))
+
+    artifact = next(artifact for artifact in result.artifacts if artifact.artifact_type == "ocr")
+    assert artifact.status == "unsupported"
+    assert "允许的缓存目录" in artifact.summary
+    assert called is False
+
+
+def test_ocr_allows_whitelisted_https_url(monkeypatch):
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "客户：S043 黑屏"}}]}
+
+    def fake_post(url, json, headers, timeout):
+        captured["image_url"] = json["messages"][0]["content"][0]["image_url"]["url"]
+        return Response()
+
+    monkeypatch.setattr(ocr.httpx, "post", fake_post)
+    request = SupportCaseRequest(
+        request_id="case_url_image",
+        source="feishu",
+        assets=[
+            SupportAsset(
+                asset_id="img_chat",
+                media_type="image",
+                filename="chat_screenshot.png",
+                url="https://assets.example.test/screen.png",
+            )
+        ],
+    )
+    settings = Settings(
+        support_ocr_provider="bailian_vl",
+        bailian_api_key="test-key",
+        support_asset_allowed_url_hosts="assets.example.test",
+    )
+
+    result = asyncio.run(build_support_case_context(request, settings))
+
+    assert "客户：S043 黑屏" in result.context.normalized_query
+    assert captured["image_url"] == "https://assets.example.test/screen.png"
+
+
+def test_visual_embedding_rejects_non_whitelisted_local_path(monkeypatch, tmp_path):
+    def fake_generate(settings, content):
+        raise AssertionError("visual embedding should not receive rejected local files")
+
+    monkeypatch.setattr(ingestion, "_generate_visual_vector", fake_generate)
+    request = SupportCaseRequest(
+        request_id="case_rejected_visual",
+        source="feishu",
+        assets=[
+            SupportAsset(
+                asset_id="img_damage",
+                media_type="image",
+                filename="product_damage.jpg",
+                local_path="/etc/passwd",
+            )
+        ],
+    )
+    settings = Settings(
+        bailian_api_key="test-key",
+        support_asset_allowed_local_dirs=str(tmp_path),
+    )
+
+    result = asyncio.run(build_support_case_context(request, settings))
+
+    artifact = next(artifact for artifact in result.artifacts if artifact.artifact_type == "image_embedding")
+    assert artifact.status == "unsupported"
+    assert "允许的缓存目录" in artifact.summary
 
 
 def test_product_damage_image_routes_to_visual_embedding_ref_without_raw_vector():
@@ -250,7 +358,7 @@ def test_local_video_sampling_records_frame_refs_without_prompt_leak(monkeypatch
         ],
     )
 
-    result = asyncio.run(build_support_case_context(request, Settings()))
+    result = asyncio.run(build_support_case_context(request, Settings(support_asset_allowed_local_dirs=str(tmp_path))))
 
     artifact = next(artifact for artifact in result.artifacts if artifact.artifact_type == "video_sampling")
     assert artifact.status == "ok"
@@ -280,7 +388,7 @@ def test_video_sampling_unavailable_records_missing_information(monkeypatch, tmp
         ],
     )
 
-    result = asyncio.run(build_support_case_context(request, Settings()))
+    result = asyncio.run(build_support_case_context(request, Settings(support_asset_allowed_local_dirs=str(tmp_path))))
 
     artifact = next(artifact for artifact in result.artifacts if artifact.artifact_type == "video_sampling")
     assert artifact.status == "unsupported"

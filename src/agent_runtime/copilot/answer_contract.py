@@ -322,9 +322,7 @@ def apply_data_source_coverage(answer: SupportAnswer | dict, coverage: DataSourc
         update={
             "data_sources_used": answer.data_sources_used or used,
             "missing_data_sources": answer.missing_data_sources or missing,
-            "recommended_action": answer.recommended_action
-            if answer.recommended_action != "ask_clarification"
-            else coverage.recommended_action,
+            "recommended_action": _bounded_recommended_action(answer.recommended_action, coverage.recommended_action),
             "owner_candidate": answer.owner_candidate or coverage.owner_candidate,
             "mention_enabled": False,
         }
@@ -394,6 +392,13 @@ def _coerce_support_answer(answer: SupportAnswer | dict) -> SupportAnswer:
     if isinstance(answer, SupportAnswer):
         return answer
     return SupportAnswer.model_validate(answer)
+
+
+def _bounded_recommended_action(answer_action: str, coverage_action: str) -> str:
+    rank = {"answer": 0, "ask_clarification": 1, "human_review": 2}
+    if rank.get(coverage_action, 0) > rank.get(answer_action, 0):
+        return coverage_action
+    return answer_action
 
 
 def _intro_paragraph(answer: SupportAnswer) -> str:

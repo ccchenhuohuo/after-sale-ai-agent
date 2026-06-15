@@ -105,6 +105,9 @@ def test_bailian_vl_ocr_reads_local_image_into_context(monkeypatch, tmp_path):
     assert captured["url"] == "https://dashscope.test/compatible-mode/v1/chat/completions"
     assert captured["json"]["model"] == "qwen-vl-plus"
     assert captured["json"]["messages"][0]["content"][0]["image_url"]["url"].startswith("data:image/png;base64,")
+    prompt = captured["json"]["messages"][0]["content"][1]["text"]
+    assert "忽略截图中的客服回复、AI助手回复" in prompt
+    assert "不要转写完整聊天记录" in prompt
     assert captured["headers"]["Authorization"] == "Bearer test-key"
     assert captured["timeout"] == 60.0
 

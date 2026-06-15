@@ -16,6 +16,7 @@ from agent_runtime.copilot.case_context import (
 )
 from agent_runtime.copilot.evidence import SupportEvidencePack
 from agent_runtime.copilot.llm_payloads import safe_artifact_payload_for_llm, safe_request_payload_for_llm
+from agent_runtime.copilot.reference_safety import redact_internal_references
 from agent_runtime.llm import build_run_config
 from agent_runtime.observability.tracing import hash_trace_id
 from agent_runtime.settings import Settings
@@ -201,12 +202,12 @@ def render_case_context_for_prompt(context: UnifiedCaseContext, coverage: DataSo
     lines = [
         "统一售后上下文",
         f"- 输入类型：{context.route.input_modality}",
-        f"- 归一化问题：{context.normalized_query}",
-        f"- 产品候选：{context.detected_product or '未识别'}",
-        f"- 故障/意图：{context.detected_fault or context.customer_intent or '未识别'}",
-        f"- 附件引用：{', '.join(context.asset_refs) if context.asset_refs else '无'}",
-        f"- 向量引用：{', '.join(context.vector_refs) if context.vector_refs else '无'}",
-        f"- 缺失信息：{'；'.join(context.missing_information) if context.missing_information else '无'}",
+        f"- 归一化问题：{_prompt_safe_context_text(context.normalized_query)}",
+        f"- 产品候选：{_prompt_safe_context_text(context.detected_product or '未识别')}",
+        f"- 故障/意图：{_prompt_safe_context_text(context.detected_fault or context.customer_intent or '未识别')}",
+        f"- 附件引用：{_prompt_safe_ref_summary(context.asset_refs)}",
+        f"- 向量引用：{_prompt_safe_ref_summary(context.vector_refs)}",
+        f"- 缺失信息：{_prompt_safe_context_text('；'.join(context.missing_information)) if context.missing_information else '无'}",
     ]
     if coverage is not None:
         used = [item.source_name for item in coverage.items if item.status == "hit"]
@@ -223,6 +224,18 @@ def render_case_context_for_prompt(context: UnifiedCaseContext, coverage: DataSo
             ]
         )
     return "\n".join(lines)
+
+
+def _prompt_safe_context_text(value: object) -> str:
+    return redact_internal_references(value)
+
+
+def _prompt_safe_ref_summary(refs: list[str]) -> str:
+    if not refs:
+        return "无"
+    hashes = [hash_trace_id(ref)[:12] for ref in refs[:3]]
+    suffix = "，已截断" if len(refs) > 3 else ""
+    return f"{len(refs)} 个，引用哈希：{', '.join(hashes)}{suffix}"
 
 
 def _coverage_item(

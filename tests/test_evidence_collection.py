@@ -301,3 +301,30 @@ def test_agent_prompt_redacts_internal_references_from_evidence_pack():
     assert "[redacted-file-key]" in prompt
     assert "[redacted-vector-ref]" in prompt
     assert "[redacted-vector]" in prompt
+
+
+def test_agent_prompt_redacts_case_context_internal_refs():
+    context = UnifiedCaseContext(
+        request_id="case_context_refs",
+        source="feishu",
+        original_user_text="客户发来图片",
+        normalized_query="客户图片已下载到 /opt/agent-runtime/private/a.jpg",
+        asset_refs=["openclaw_asset:imageKey:img_secret_abcdef"],
+        vector_refs=["vec_secret_abcdef"],
+        missing_information=["缺少原始文件 https://internal.example/file"],
+        route=RouteDecision(input_modality="image", confidence=0.8),
+    )
+
+    prompt = build_agent_input(
+        "客户发来图片",
+        source="飞书客服群",
+        case_context=context,
+    )
+
+    assert "openclaw_asset:imageKey:img_secret_abcdef" not in prompt
+    assert "vec_secret_abcdef" not in prompt
+    assert "/opt/agent-runtime" not in prompt
+    assert "https://internal.example" not in prompt
+    assert "引用哈希" in prompt
+    assert "[redacted-path]" in prompt
+    assert "[redacted-url]" in prompt

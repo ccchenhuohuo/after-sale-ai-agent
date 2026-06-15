@@ -3,20 +3,29 @@ from __future__ import annotations
 import re
 
 
+REFERENCE_REF_PREFIX = r"\s：:，。；、;,(（"
+REFERENCE_VALUE_BOUNDARY = r"\s，。；、;,)）"
+
 REFERENCE_REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"\bhttps?://[^\s，。；;,)）]+", re.IGNORECASE), "[redacted-url]"),
-    (re.compile(r"\bfile://[^\s，。；;,)）]+", re.IGNORECASE), "[redacted-path]"),
-    (re.compile(r"(?:^|[\s：:])/(?:tmp|var|opt|home|Users|private|mnt|data)/[^\s，。；;,)）]+"), " [redacted-path]"),
-    (re.compile(r"\b[A-Za-z]:\\[^\s，。；;,)）]+"), "[redacted-path]"),
+    (re.compile(r"\[[+-]?(?:0|1)?\.\d{2,}\s*,\s*[+-]?(?:0|1)?\.\d{2,}[^\]]*\]"), "[redacted-vector]"),
+    (re.compile(rf"\bhttps?://[^{REFERENCE_VALUE_BOUNDARY}]+", re.IGNORECASE), "[redacted-url]"),
+    (re.compile(rf"\bfile://[^{REFERENCE_VALUE_BOUNDARY}]+", re.IGNORECASE), "[redacted-path]"),
     (
-        re.compile(r"\b(?:file[_-]?key|fileKey|imageKey|mediaKey|file_token)\s*[:=]\s*[^\s，。；;,)）]+", re.IGNORECASE),
+        re.compile(rf"(?:^|[{REFERENCE_REF_PREFIX}])/(?:tmp|var|opt|home|Users|private|mnt|data)/[^{REFERENCE_VALUE_BOUNDARY}]+"),
+        " [redacted-path]",
+    ),
+    (re.compile(rf"\b[A-Za-z]:\\[^{REFERENCE_VALUE_BOUNDARY}]+"), "[redacted-path]"),
+    (
+        re.compile(
+            rf"\b(?:file[_-]?key|fileKey|imageKey|mediaKey|file_token)\s*[:=]\s*[^{REFERENCE_VALUE_BOUNDARY}]+",
+            re.IGNORECASE,
+        ),
         "[redacted-file-key]",
     ),
     (re.compile(r"\b(?:file[_-]?key|fileKey|imageKey|mediaKey|file_token)\b", re.IGNORECASE), "[redacted-file-key]"),
     (re.compile(r"\b(?:img|file|media)_[A-Za-z0-9][A-Za-z0-9_-]{6,}\b", re.IGNORECASE), "[redacted-file-ref]"),
     (re.compile(r"\b(?:vector[_-]?id|vector ref|vector_ref)\s*[:=]?\s*[A-Za-z0-9_:-]*", re.IGNORECASE), "[redacted-vector-ref]"),
     (re.compile(r"\b(?:vec|vector)[:_][A-Za-z0-9][A-Za-z0-9_:-]{6,}\b", re.IGNORECASE), "[redacted-vector-ref]"),
-    (re.compile(r"\[[+-]?(?:0|1)?\.\d{2,}\s*,\s*[+-]?(?:0|1)?\.\d{2,}[^\]]*\]"), "[redacted-vector]"),
 )
 
 

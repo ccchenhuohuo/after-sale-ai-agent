@@ -352,3 +352,97 @@ def test_agent_prompt_redacts_raw_issue_internal_refs():
     assert "[redacted-file-key]" in prompt
     assert "[redacted-vector-ref]" in prompt
     assert "[redacted-vector]" in prompt
+
+
+def test_agent_prompt_redacts_combined_reference_boundaries():
+    pack = SupportEvidencePack(
+        raw_issue_hash="hash",
+        query_chars=20,
+        issue_type="quality_issue",
+        product_model="L023",
+        sku=[
+            SkuEvidence(
+                status="hit",
+                evidence_level="identity_only",
+                verified=True,
+                query_hash="sku-hash",
+                sku="L023",
+                score=100,
+                matched_reasons=[
+                    "路径；/opt/agent-runtime/private/sku.jpg",
+                    "embedding=[0.123456, 0.654321]",
+                    "file_key=img_secret_123456",
+                ],
+            )
+        ],
+        official=[
+            OfficialKbEvidence(
+                status="hit",
+                evidence_level="formal",
+                verified=True,
+                query_hash="official-hash",
+                title="正式依据",
+                section="章节；/opt/agent-runtime/private/section",
+                reference_url="https://internal.example/kb",
+            )
+        ],
+        history=[
+            HistoryEvidence(
+                status="hit",
+                evidence_level="reviewed_case",
+                verified=True,
+                query_hash="history-hash",
+                message="话题链接：https://feishu.example/t、路径；/opt/agent-runtime/history/a.jpg、vector_id=vec_history_secret",
+            )
+        ],
+        media=[
+            MediaEvidence(
+                status="hit",
+                evidence_level="unreviewed_media",
+                verified=False,
+                query_hash="media-hash",
+                message="消息链接：https://feishu.example/m、路径；/opt/agent-runtime/media/a.jpg、embedding=[0.777777, 0.888888]",
+            )
+        ],
+    )
+    context = UnifiedCaseContext(
+        request_id="case_combo",
+        source="feishu",
+        original_user_text="客户发来图片",
+        normalized_query="客户图片；/opt/agent-runtime/context/a.jpg",
+        asset_refs=["openclaw_asset:imageKey:img_context_secret"],
+        vector_refs=["vec_context_secret"],
+        missing_information=["补充链接；https://internal.example/context"],
+        route=RouteDecision(input_modality="mixed", confidence=0.8),
+    )
+
+    prompt = build_agent_input(
+        "客户原文；/opt/agent-runtime/raw/a.jpg、https://raw.example/a、vector_id=vec_raw_secret、embedding=[0.111111, 0.222222]",
+        source="飞书客服群",
+        evidence_pack=pack,
+        case_context=context,
+    )
+
+    for forbidden in (
+        "/opt/agent-runtime",
+        "https://internal.example",
+        "https://feishu.example",
+        "https://raw.example",
+        "img_secret_123456",
+        "img_context_secret",
+        "vec_history_secret",
+        "vec_context_secret",
+        "vec_raw_secret",
+        "0.123456",
+        "0.654321",
+        "0.777777",
+        "0.888888",
+        "0.111111",
+        "0.222222",
+    ):
+        assert forbidden not in prompt
+    assert "[redacted-path]" in prompt
+    assert "[redacted-url]" in prompt
+    assert "[redacted-file-key]" in prompt
+    assert "[redacted-vector-ref]" in prompt
+    assert "[redacted-vector]" in prompt

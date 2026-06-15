@@ -99,6 +99,8 @@ FEISHU_VISIBLE_MARKDOWN_PATTERNS = [
     re.compile(r"\*\*[^*]+\*\*"),
 ]
 
+REVIEWED_HISTORY_MARKER_RE = re.compile(r"(?:已审核群聊历史\s*FAQ|reviewed_case)", re.IGNORECASE)
+
 
 @dataclass(frozen=True)
 class ContractIssue:
@@ -121,7 +123,7 @@ class SupportAnswer(BaseModel):
     troubleshooting_steps: list[str] = Field(description="建议排查步骤。")
     follow_up_questions: list[str] = Field(description="需要继续追问的信息。")
     official_evidence: str = Field(description="正式依据说明；无命中时必须明确未查询到可信正式依据。")
-    history_reference: str = Field(description="历史参考说明；未审核证据必须标注需人工确认。")
+    history_reference: str = Field(description="历史参考说明；已审核群聊历史 FAQ 可作为可靠售后参考，未审核媒体证据必须标注需人工确认。")
     data_sources_used: list[str] = Field(default_factory=list, description="本轮已参考或命中的数据源名称。")
     missing_data_sources: list[str] = Field(default_factory=list, description="本轮缺失、未接入或未命中的关键数据源。")
     recommended_action: Literal["answer", "ask_clarification", "human_review"] = Field(
@@ -202,7 +204,7 @@ def validate_answer_contract(
             break
         previous_position = position
 
-    issues.extend(_forbidden_commitment_issues(text))
+    issues.extend(_forbidden_commitment_issues(_customer_visible_contract_text(text)))
 
     official_section = _section_text(text, "正式依据")
     if not official_kb_connected and official_section and "未查询到可信正式依据" not in official_section:
@@ -213,13 +215,14 @@ def validate_answer_contract(
         issues.append(ContractIssue("history_evidence", "历史案例库未接入时，历史参考必须说明未查询到可信历史参考。"))
     if history_connected and history_section:
         has_empty_history = "未查询到可信历史参考" in history_section
+        has_reviewed_history_marker = bool(REVIEWED_HISTORY_MARKER_RE.search(history_section))
         has_unreviewed_marker = "未审核历史参考" in history_section and "需人工确认" in history_section
         has_unreviewed_media_marker = "未审核媒体观察证据" in history_section and "需人工确认" in history_section
-        if not (has_empty_history or has_unreviewed_marker or has_unreviewed_media_marker):
+        if not (has_empty_history or has_reviewed_history_marker or has_unreviewed_marker or has_unreviewed_media_marker):
             issues.append(
                 ContractIssue(
                     "history_evidence",
-                    "历史参考必须标注未查询到可信历史参考，或标注未审核历史/媒体观察证据且需人工确认。",
+                    "历史参考必须标注未查询到可信历史参考、已审核群聊历史 FAQ，或标注未审核媒体观察证据且需人工确认。",
                 )
             )
 
@@ -320,8 +323,9 @@ def apply_data_source_coverage(answer: SupportAnswer | dict, coverage: DataSourc
     missing = [item.source_name for item in coverage.items if item.status in {"missing", "not_configured"}]
     return answer.model_copy(
         update={
-            "data_sources_used": answer.data_sources_used or used,
-            "missing_data_sources": answer.missing_data_sources or missing,
+            "data_sources_used": used,
+            "missing_data_sources": missing,
+            "history_reference": _coverage_history_reference(answer.history_reference, coverage),
             "recommended_action": _bounded_recommended_action(answer.recommended_action, coverage.recommended_action),
             "owner_candidate": answer.owner_candidate or coverage.owner_candidate,
             "mention_enabled": False,
@@ -377,6 +381,18 @@ def _has_history_or_media_evidence(evidence_pack: SupportEvidencePack | None) ->
     return evidence_pack.history_hit_count > 0 or evidence_pack.media_hit_count > 0
 
 
+def _customer_visible_contract_text(text: str) -> str:
+    return "\n".join(
+        section
+        for section in (
+            _section_text(text, "建议回复（供客服参考，可复制调整）"),
+            _section_text(text, "建议排查步骤"),
+            _section_text(text, "需要追问"),
+        )
+        if section
+    )
+
+
 def _forbidden_commitment_issues(text: str) -> list[ContractIssue]:
     issues: list[ContractIssue] = []
     for pattern in FORBIDDEN_COMMITMENT_PATTERNS:
@@ -399,6 +415,26 @@ def _bounded_recommended_action(answer_action: str, coverage_action: str) -> str
     if rank.get(coverage_action, 0) > rank.get(answer_action, 0):
         return coverage_action
     return answer_action
+
+
+def _coverage_history_reference(history_reference: str, coverage: DataSourceCoverage) -> str:
+    if not _coverage_has_reviewed_history(coverage):
+        return history_reference
+    clean_reference = str(history_reference or "").strip()
+    if REVIEWED_HISTORY_MARKER_RE.search(clean_reference):
+        return clean_reference
+    marker = "已审核群聊历史 FAQ："
+    suffix = "已命中，可作为可靠售后参考；不是正式政策源。"
+    if not clean_reference or "未查询到可信历史参考" in clean_reference:
+        return marker + suffix
+    return marker + clean_reference
+
+
+def _coverage_has_reviewed_history(coverage: DataSourceCoverage) -> bool:
+    return any(
+        item.source_id == "history_faq" and item.status == "hit" and item.authority == "reviewed"
+        for item in coverage.items
+    )
 
 
 def _intro_paragraph(answer: SupportAnswer) -> str:

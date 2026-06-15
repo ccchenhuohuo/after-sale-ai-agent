@@ -23,6 +23,7 @@ class FeishuMessageEvent:
     root_id: str = ""
     parent_id: str = ""
     create_time: str = ""
+    event_source: str = "sdk"
     raw_content: object = field(default=None, compare=False)
 
 
@@ -68,6 +69,7 @@ def event_from_payload(payload: dict[str, Any]) -> FeishuMessageEvent | None:
     """Normalize Feishu HTTP callback, SDK callback, or OpenAPI message payload."""
     event = payload.get("event") if isinstance(payload.get("event"), dict) else payload
     header = payload.get("header") if isinstance(payload.get("header"), dict) else {}
+    event_source = str(payload.get("_agent_runtime_event_source") or "sdk")
 
     message = event.get("message") if isinstance(event.get("message"), dict) else None
     if message:
@@ -90,6 +92,7 @@ def event_from_payload(payload: dict[str, Any]) -> FeishuMessageEvent | None:
             root_id=_field(message, "root_id"),
             parent_id=_field(message, "parent_id", "upper_message_id"),
             create_time=_field(message, "create_time", "create_time_ms"),
+            event_source=event_source,
         )
 
     sender = payload.get("sender") if isinstance(payload.get("sender"), dict) else {}
@@ -111,6 +114,7 @@ def event_from_payload(payload: dict[str, Any]) -> FeishuMessageEvent | None:
         root_id=_field(payload, "root_id"),
         parent_id=_field(payload, "parent_id", "upper_message_id"),
         create_time=_field(payload, "create_time", "create_time_ms"),
+        event_source=event_source,
     )
 
 

@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from agent_runtime.copilot.case_context import SupportAsset
+from agent_runtime.copilot.evidence import short_hash
 
 
 def support_assets_from_openclaw_payload(
@@ -114,8 +115,8 @@ def _media_type_for_resource(resource: Mapping[str, Any]) -> str:
 
 def _asset_id(message_id: str, media_type: str, resource_id: str, index: int) -> str:
     if resource_id:
-        return f"{message_id or 'openclaw'}:{media_type}:{resource_id}"
-    return f"{message_id or 'openclaw'}:{media_type}:{index}"
+        return f"openclaw_asset:{short_hash(message_id or 'openclaw')}:{media_type}:{short_hash(resource_id)}"
+    return f"openclaw_asset:{short_hash(message_id or 'openclaw')}:{media_type}:{index}"
 
 
 def _support_assets_from_media_payload(

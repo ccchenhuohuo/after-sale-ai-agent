@@ -1,49 +1,54 @@
 from pathlib import Path
-from types import SimpleNamespace
 
 import agent_runtime.copilot.video_sampling as video_sampling
 from agent_runtime.copilot.video_sampling import sample_video_frames
 from agent_runtime.settings import Settings
 
 
-def test_sample_video_frames_invokes_ffmpeg_and_returns_frame_paths(monkeypatch, tmp_path):
-    video = tmp_path / "fault.mp4"
-    video.write_bytes(b"fake-video")
-    captured = {}
+def test_video_sampling_rejects_spoofed_mp4_before_ffprobe(tmp_path):
+    fake_video = tmp_path / "fault.mp4"
+    fake_video.write_text("not a video", encoding="utf-8")
 
-    def fake_run(command, check, capture_output, text, timeout):
-        captured["command"] = command
-        captured["timeout"] = timeout
-        output_pattern = Path(command[-1])
-        (output_pattern.parent / "frame_001.jpg").write_bytes(b"fake-frame")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(video_sampling.shutil, "which", lambda name: "/usr/bin/ffmpeg")
-    monkeypatch.setattr(video_sampling.subprocess, "run", fake_run)
-    settings = Settings(
-        support_video_sample_dir=str(tmp_path / "samples"),
-        support_video_sample_count=2,
-        support_video_sample_interval_seconds=4,
-        support_video_sample_timeout_seconds=9,
+    result = sample_video_frames(
+        str(fake_video),
+        "video_asset",
+        Settings(support_video_ffmpeg_path="/bin/echo"),
     )
 
-    result = sample_video_frames(str(video), "video_fault", settings)
-
-    assert result.status == "ok"
-    sample_dir = tmp_path / "samples" / f"video_fault_{video_sampling.short_hash(str(video))}"
-    assert result.frame_paths == [str(sample_dir / "frame_001.jpg")]
-    assert captured["command"][0] == "/usr/bin/ffmpeg"
-    assert captured["command"][captured["command"].index("-frames:v") + 1] == "2"
-    assert "fps=1/4.0" in captured["command"][captured["command"].index("-vf") + 1]
-    assert captured["timeout"] == 9
+    assert result.status == "unsupported"
+    assert "signature" in result.error
 
 
-def test_sample_video_frames_without_ffmpeg_is_unsupported(monkeypatch, tmp_path):
+def test_video_sampling_ffprobe_preflight_requires_video_stream(monkeypatch, tmp_path):
     video = tmp_path / "fault.mp4"
-    video.write_bytes(b"fake-video")
-    monkeypatch.setattr(video_sampling.shutil, "which", lambda name: None)
+    video.write_bytes(b"\x00\x00\x00\x18ftypmp42smoke")
+    commands = []
 
-    result = sample_video_frames(str(video), "video_fault", Settings())
+    def fake_which(name):
+        if name == "ffprobe":
+            return "/usr/bin/ffprobe"
+        return ""
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+
+        class Completed:
+            returncode = 0
+            stdout = '{"streams":[{"codec_type":"audio"}],"format":{"duration":"10"}}'
+            stderr = ""
+
+        return Completed()
+
+    monkeypatch.setattr(video_sampling.shutil, "which", fake_which)
+    monkeypatch.setattr(video_sampling.subprocess, "run", fake_run)
+
+    result = sample_video_frames(
+        str(video),
+        "video_asset",
+        Settings(support_video_ffmpeg_path="/usr/bin/ffmpeg"),
+    )
 
     assert result.status == "unsupported"
-    assert result.error == "ffmpeg not found"
+    assert "no video stream" in result.error
+    assert len(commands) == 1
+    assert Path(commands[0][0]).name == "ffprobe"

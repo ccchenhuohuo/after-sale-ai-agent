@@ -6,7 +6,7 @@
 flowchart LR
     issue["客户问题"] --> extract["抽取型号、模块、错误码、问题类型"]
     extract --> official["正式知识库<br/>正式依据"]
-    extract --> history["文本历史话题 RAG<br/>未审核历史参考"]
+    extract --> history["群聊历史 FAQ RAG<br/>已审核可靠参考"]
     extract --> media["媒体观察证据 RAG<br/>未审核媒体观察"]
     official --> merge["合并与重排"]
     history --> merge
@@ -16,11 +16,13 @@ flowchart LR
 
 知识层拆成两个库：
 
-- 正式知识库：产品文档、GTM 文档、QA 规格、说明书、FAQ、排查 SOP、售后政策。
-- 历史参考库：飞书售后群话题、真实客户反馈、负责人回复、历史工单。
+- 正式知识库：产品文档、MRD、GTM 文档、QA 规格、说明书、FAQ、排查 SOP、售后政策。
+- 历史参考库：已审核群聊历史 FAQ、飞书售后群话题、真实客户反馈、负责人回复、历史工单。
 - 媒体观察库：飞书话题中的图片、视频、截图等媒体元数据和原消息链接，用于定位待人工核验的视觉证据。当前已下载到 staging 的本地图片会使用 `qwen3-vl-embedding` 生成融合向量，并在运行时用 `qwen3-vl-rerank` 重排；未下载媒体仍只做元数据检索。
 
-正式知识库可以作为正式依据引用。当前已接入的飞书 raw JSON 历史话题 RAG 只能作为未审核历史参考，媒体观察库只能作为未审核媒体观察证据；两者都必须标注“需人工确认”，不能作为正式政策、正式技术结论、最终判责或客户承诺依据。
+视觉处理分为三条独立链路：OCR 负责聊天截图、铭牌、发票、报错图中的文字；image embedding 负责生成 `vector_id` 并参与媒体向量检索；VL understanding 使用千问 VL 把产品图、损坏图、包装图和视频关键帧整理成结构化视觉摘要，进入 `UnifiedCaseContext`。VL 摘要是视觉观察证据，不是正式售后政策依据。
+
+正式知识库可以作为正式依据引用。当前进入历史 FAQ 索引的飞书群聊问答默认已审核，可作为可靠售后参考；它不是正式政策源，不能覆盖正式 KB/MRD/SOP，也不能单独支撑退款、换新、补发、最终判责或客户承诺依据。媒体观察库仍只能作为未审核媒体观察证据；仅命中媒体观察时最终动作上限为 `human_review`，必须标注“需人工确认”，不能作为正式政策、正式技术结论或最终判责依据。
 
 ## 当前终端运行时
 
@@ -32,8 +34,8 @@ flowchart LR
 flowchart TB
     msg["客服输入"] --> agent["OpenAI Agents SDK"]
     agent --> sku["SKU 目录<br/>真实合并 SKU 表"]
-    agent --> official["正式知识库工具<br/>接入前显式返回空结果"]
-    agent --> history["文本历史话题 RAG<br/>未审核历史参考"]
+    agent --> official["正式 KB/MRD/手册工具<br/>文件索引 V1"]
+    agent --> history["群聊历史 FAQ RAG<br/>已审核可靠参考"]
     agent --> media["媒体观察证据 RAG<br/>未审核媒体观察"]
     sku --> answer["结构化答案"]
     official --> answer
@@ -41,7 +43,7 @@ flowchart TB
     media --> answer
 ```
 
-当前 SKU 目录是真实可用的，可用于产品身份识别和负责人流转。正式知识库不做假数据兜底：在正式 RAG 源接入前，`hybrid_search_kb` 返回“未查询到可信正式依据”。`search_issue_history` 已升级为混合证据打包：先返回 SKU 精准匹配，再返回文本历史参考和媒体观察证据。文本历史话题默认通过阿里云百炼 `text-embedding-v4` 和 `qwen3-rerank` 调用检索模型；媒体观察证据对已下载图片使用 `qwen3-vl-embedding` / `qwen3-vl-rerank`，对未下载图片/视频保留 raw media 元数据 fallback。所有非正式证据都只能作为内部客服参考。
+当前 SKU 目录是真实可用的，可用于产品身份识别和负责人流转。正式知识库不做假数据兜底：`hybrid_search_kb` 读取 `data/formal_kb/index/latest` 文件型索引，索引缺失或未命中时返回“未查询到可信正式依据”。`search_issue_history` 已升级为混合证据打包：先返回 SKU 精准匹配，再返回已审核群聊历史 FAQ 和媒体观察证据。文本历史 FAQ 默认通过阿里云百炼 `text-embedding-v4` 和 `qwen3-rerank` 调用检索模型；媒体观察证据对已下载图片使用 `qwen3-vl-embedding` / `qwen3-vl-rerank`，并可消费 intake 生成的 `vector_id` 做媒体向量检索；产品图和视频关键帧还会通过 VL understanding 生成可读视觉摘要；未下载图片/视频保留 raw media 元数据 fallback。
 
 ## 真实飞书采集状态
 
@@ -60,7 +62,7 @@ flowchart TB
 
 - 终端 Agent 运行 Agents SDK 路径，并可调用当前工具，包括 SKU 支持目录工具。
 - 飞书 Base 采集和话题 raw JSON 已经形成真实历史来源；其中 2026-05-30 至 2026-06-02 的 55 个话题已接入终端历史话题 RAG MVP。
-- 当前接入的是未审核历史参考和未审核媒体观察证据。后续如果要升级为更高可信度的历史案例卡片，需要完成隐私清理、症状/根因/解决方案抽取、媒体内容理解和人工复核。
+- 当前接入的是已审核群聊历史 FAQ 和未审核媒体观察证据。后续如果要升级为更高结构化的历史案例卡片，仍需要继续做隐私清理、症状/根因/解决方案抽取、媒体内容理解和字段化质量控制。
 
 ```mermaid
 flowchart LR

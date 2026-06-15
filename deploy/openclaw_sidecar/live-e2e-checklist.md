@@ -8,10 +8,10 @@ real group.
 ## Preconditions
 
 - Python Support Copilot service is running.
-- `OPENCLAW_FEISHU_BRIDGE_SECRET` is either empty on both sides or configured
-  identically in the Python service and the OpenClaw sidecar environment. The
-  Feishu/OpenClaw message endpoint is intentionally open by default for trusted
-  channel traffic.
+- `OPENCLAW_FEISHU_BRIDGE_SECRET` is configured identically in the Python
+  service and the OpenClaw sidecar environment. The Python compatibility
+  endpoint requires this secret by default and should be bound to localhost in
+  production.
 - If OpenClaw forwards local media paths, the sidecar download directory is
   included in the Python service `SUPPORT_ASSET_ALLOWED_LOCAL_DIRS`.
 - OpenClaw sidecar uses `openclaw@2026.6.6` and

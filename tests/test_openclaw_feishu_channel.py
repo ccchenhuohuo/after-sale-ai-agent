@@ -82,7 +82,8 @@ def test_openclaw_official_message_context_converts_to_support_case_request():
     assert request.metadata["content_type"] == "text"
     assert request.metadata["root_id"] == "om_root"
     assert request.metadata["parent_id"] == "om_parent"
-    assert request.assets[0].asset_id == "om_msg:image:img_key"
+    assert request.assets[0].asset_id.startswith("openclaw_asset:")
+    assert "img_key" not in request.assets[0].asset_id
     assert request.assets[0].filename == "screen.jpg"
 
 
@@ -144,9 +145,12 @@ def test_openclaw_media_resources_convert_to_support_assets():
 
     assert [asset.media_type for asset in request.assets] == ["image", "video", "file"]
     assert request.assets[0].file_key == "img_key"
+    assert "img_key" not in request.assets[0].asset_id
     assert request.assets[0].local_path == "/tmp/openclaw/chat_screenshot.png"
     assert request.assets[1].file_key == "video_key"
+    assert "video_key" not in request.assets[1].asset_id
     assert request.assets[2].filename == "invoice.pdf"
+    assert "file_key" not in request.assets[2].asset_id
 
 
 def test_openclaw_inbound_envelope_media_payload_converts_to_support_assets():
@@ -201,7 +205,8 @@ def test_openclaw_download_failure_asset_does_not_block_request_construction():
         message_id="om_msg",
     )
 
-    assert asset.asset_id == "om_msg:image:img_key"
+    assert asset.asset_id.startswith("openclaw_asset:")
+    assert "img_key" not in asset.asset_id
     assert asset.media_type == "image"
     assert asset.metadata["download_status"] == "error"
     assert asset.metadata["download_error"] == "HTTP 504"
@@ -236,7 +241,8 @@ def test_openclaw_burst_batch_merges_text_and_assets_into_one_case():
     assert request.channel == "openclaw_feishu"
     assert request.source_platform == "feishu"
     assert len(request.assets) == 1
-    assert request.assets[0].asset_id == "om_img:image:img_damage"
+    assert request.assets[0].asset_id.startswith("openclaw_asset:")
+    assert "img_damage" not in request.assets[0].asset_id
     assert request.metadata["batch_size"] == 2
 
 
@@ -372,11 +378,12 @@ def test_openclaw_health_reports_channel_without_runtime_configuration(monkeypat
         "channel": "openclaw_feishu",
         "runtime": "support_copilot",
         "requiresSecret": True,
+        "secretConfigured": True,
     }
     assert configured is False
 
 
-def test_openclaw_health_reports_open_message_endpoint_when_secret_unset(monkeypatch):
+def test_openclaw_health_reports_required_unconfigured_secret_by_default(monkeypatch):
     monkeypatch.setattr(openclaw_webhook, "get_settings", lambda: Settings())
 
     health = asyncio.run(openclaw_webhook.openclaw_feishu_health())
@@ -385,8 +392,18 @@ def test_openclaw_health_reports_open_message_endpoint_when_secret_unset(monkeyp
         "ok": True,
         "channel": "openclaw_feishu",
         "runtime": "support_copilot",
-        "requiresSecret": False,
+        "requiresSecret": True,
+        "secretConfigured": False,
     }
+
+
+def test_openclaw_webhook_rejects_when_secret_required_but_unconfigured(monkeypatch):
+    monkeypatch.setattr(openclaw_webhook, "get_settings", lambda: Settings())
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(openclaw_webhook.openclaw_feishu_support_case({"messageId": "om_msg", "content": "ping"}))
+
+    assert exc_info.value.status_code == 403
 
 
 def test_openclaw_webhook_returns_thread_reply_payload(monkeypatch):
@@ -403,7 +420,11 @@ def test_openclaw_webhook_returns_thread_reply_payload(monkeypatch):
             coverage=SimpleNamespace(recommended_action="answer"),
         )
 
-    monkeypatch.setattr(openclaw_webhook, "get_settings", lambda: Settings(llm_api_key="test-key"))
+    monkeypatch.setattr(
+        openclaw_webhook,
+        "get_settings",
+        lambda: Settings(llm_api_key="test-key", openclaw_feishu_bridge_secret="secret"),
+    )
     monkeypatch.setattr(openclaw_webhook, "configure_agents_runtime", lambda settings: settings)
     monkeypatch.setattr(openclaw_webhook, "build_support_runtime_session", lambda settings, session_id: "session")
     monkeypatch.setattr(openclaw_webhook, "run_support_case_request", fake_run_support_case_request)
@@ -419,7 +440,8 @@ def test_openclaw_webhook_returns_thread_reply_payload(monkeypatch):
                     "content": "客户反馈 L023 不亮",
                     "resources": [{"type": "image", "imageKey": "img_key"}],
                 }
-            }
+            },
+            x_openclaw_feishu_secret="secret",
         )
     )
 
@@ -441,7 +463,7 @@ def test_openclaw_webhook_contract_only_smoke_does_not_configure_runtime(monkeyp
         configured = True
         raise AssertionError("contractOnly smoke must not configure the LLM runtime")
 
-    monkeypatch.setattr(openclaw_webhook, "get_settings", lambda: Settings())
+    monkeypatch.setattr(openclaw_webhook, "get_settings", lambda: Settings(openclaw_feishu_require_secret=False))
     monkeypatch.setattr(openclaw_webhook, "configure_agents_runtime", fake_configure)
 
     reply = asyncio.run(

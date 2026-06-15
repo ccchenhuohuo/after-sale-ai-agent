@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -37,6 +38,9 @@ def sample_video_frames(video_path: str, asset_id: str, settings: Settings) -> V
     ffmpeg = settings.support_video_ffmpeg_path or shutil.which("ffmpeg")
     if not ffmpeg:
         return VideoSamplingResult(status="unsupported", error="ffmpeg not found")
+    preflight = _preflight_video_file(path, settings, ffmpeg)
+    if preflight is not None:
+        return preflight
 
     output_dir = _sample_dir(settings, asset_id, path)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -78,6 +82,100 @@ def sample_video_frames(video_path: str, asset_id: str, settings: Settings) -> V
     if not frames:
         return VideoSamplingResult(status="empty", error="ffmpeg produced no frames")
     return VideoSamplingResult(status="ok", frame_paths=[str(frame) for frame in frames])
+
+
+def _preflight_video_file(path: Path, settings: Settings, ffmpeg: str) -> VideoSamplingResult | None:
+    if not _looks_like_video_container(path):
+        return VideoSamplingResult(status="unsupported", error="Video file signature is not a supported container")
+    ffprobe = _ffprobe_path(ffmpeg)
+    if not ffprobe:
+        return VideoSamplingResult(status="unsupported", error="ffprobe not found")
+    command = [
+        ffprobe,
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_streams",
+        "-show_format",
+        str(path),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=settings.support_video_probe_timeout_seconds,
+        )
+    except Exception as exc:
+        return VideoSamplingResult(status="error", error=f"ffprobe {type(exc).__name__}: {exc}")
+    if completed.returncode != 0:
+        message = (completed.stderr or completed.stdout or "ffprobe failed").strip()
+        return VideoSamplingResult(status="unsupported", error=message[:500])
+    try:
+        payload = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError:
+        return VideoSamplingResult(status="unsupported", error="ffprobe returned invalid JSON")
+    streams = payload.get("streams") if isinstance(payload, dict) else None
+    video_streams = [stream for stream in streams or [] if isinstance(stream, dict) and stream.get("codec_type") == "video"]
+    if not video_streams:
+        return VideoSamplingResult(status="unsupported", error="Video file contains no video stream")
+    stream = video_streams[0]
+    width = _int_value(stream.get("width"))
+    height = _int_value(stream.get("height"))
+    if width and settings.support_video_max_width and width > settings.support_video_max_width:
+        return VideoSamplingResult(status="unsupported", error="Video width exceeds configured limit")
+    if height and settings.support_video_max_height and height > settings.support_video_max_height:
+        return VideoSamplingResult(status="unsupported", error="Video height exceeds configured limit")
+    duration = _duration_seconds(stream.get("duration"))
+    format_payload = payload.get("format") if isinstance(payload.get("format"), dict) else {}
+    if duration <= 0:
+        duration = _duration_seconds(format_payload.get("duration"))
+    if duration and settings.support_video_max_duration_seconds and duration > settings.support_video_max_duration_seconds:
+        return VideoSamplingResult(status="unsupported", error="Video duration exceeds configured limit")
+    return None
+
+
+def _looks_like_video_container(path: Path) -> bool:
+    try:
+        header = path.read_bytes()[:64]
+    except OSError:
+        return False
+    if len(header) < 4:
+        return False
+    if header.startswith(b"\x1a\x45\xdf\xa3"):  # WebM / Matroska
+        return True
+    if header.startswith(b"RIFF") and b"AVI" in header[:16]:
+        return True
+    if header.startswith(b"OggS"):
+        return True
+    if b"ftyp" in header[4:16]:  # MP4 / MOV family
+        return True
+    return False
+
+
+def _ffprobe_path(ffmpeg: str) -> str:
+    configured = Path(ffmpeg)
+    if configured.name == "ffmpeg":
+        sibling = configured.with_name("ffprobe")
+        if sibling.exists():
+            return str(sibling)
+    return shutil.which("ffprobe") or ""
+
+
+def _int_value(value: object) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _duration_seconds(value: object) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _sample_dir(settings: Settings, asset_id: str, path: Path) -> Path:

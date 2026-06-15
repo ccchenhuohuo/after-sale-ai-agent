@@ -25,11 +25,21 @@ class Settings(BaseSettings):
     support_ocr_base_url: str = ""
     support_ocr_timeout_seconds: float = 60.0
     support_ocr_image_max_bytes: int = 7_000_000
+    support_visual_understanding_provider: str = "disabled"
+    support_visual_understanding_model: str = "qwen-vl-plus"
+    support_visual_understanding_base_url: str = ""
+    support_visual_understanding_timeout_seconds: float = 60.0
+    support_visual_understanding_image_max_bytes: int = 7_000_000
+    support_visual_understanding_max_images: int = 4
     support_video_sampling_enabled: bool = True
     support_video_sample_dir: str = "data/feishu_runtime/video_samples"
     support_video_sample_count: int = 3
     support_video_sample_interval_seconds: float = 3.0
     support_video_sample_timeout_seconds: float = 30.0
+    support_video_probe_timeout_seconds: float = 10.0
+    support_video_max_duration_seconds: float = 300.0
+    support_video_max_width: int = 3840
+    support_video_max_height: int = 2160
     support_video_ffmpeg_path: str = ""
     support_vector_index_namespace: str = "after_sales_v1"
     support_vector_artifact_dir: str = "data/feishu_runtime/vector_artifacts"
@@ -39,6 +49,7 @@ class Settings(BaseSettings):
     openclaw_sidecar_version: str = "2026.6.6"
     openclaw_lark_plugin_version: str = "2026.6.10"
     openclaw_feishu_bridge_secret: str = ""
+    openclaw_feishu_require_secret: bool = True
 
     openai_tracing_api_key: str = ""
     openai_org_id: str = ""
@@ -46,6 +57,11 @@ class Settings(BaseSettings):
     support_agent_tracing_disabled: bool = True
     support_agent_trace_include_sensitive_data: bool = False
     support_agent_trace_workflow_name: str = "ulanzi after-sell copilot MVP"
+    support_trace_admission_mode: str = "sample"
+    support_trace_duplicate_events: bool = False
+    support_trace_ignored_events: bool = False
+    support_trace_admission_sample_rate: float = 0.05
+    support_trace_runtime_pipeline: bool = True
     phoenix_tracing_enabled: bool = False
     phoenix_collector_endpoint: str = "http://opencloud.taild79054.ts.net:6006/v1/traces"
     phoenix_project_name: str = "agent-runtime-test"
@@ -87,6 +103,15 @@ class Settings(BaseSettings):
     history_rag_require_remote_models: bool = True
     history_rag_top_k: int = 10
     history_rag_top_n: int = 5
+    formal_kb_source_dir: str = "data/formal_kb/source"
+    formal_kb_index_path: str = "data/formal_kb/index/latest"
+    formal_kb_provider: str = "local_hash"
+    formal_kb_embedding_model: str = "text-embedding-v4"
+    formal_kb_rerank_model: str = "qwen3-rerank"
+    formal_kb_embedding_dimension: int = 768
+    formal_kb_require_remote_models: bool = False
+    formal_kb_top_k: int = 8
+    formal_kb_top_n: int = 4
     media_rag_index_path: str = "data/media_rag/index/latest"
     media_rag_provider: str = "bailian_vl"
     media_rag_embedding_model: str = "qwen3-vl-embedding"

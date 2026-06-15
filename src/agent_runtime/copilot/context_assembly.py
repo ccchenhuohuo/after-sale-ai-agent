@@ -17,6 +17,7 @@ from agent_runtime.copilot.case_context import (
 from agent_runtime.copilot.evidence import SupportEvidencePack
 from agent_runtime.copilot.llm_payloads import safe_artifact_payload_for_llm, safe_request_payload_for_llm
 from agent_runtime.llm import build_run_config
+from agent_runtime.observability.tracing import hash_trace_id
 from agent_runtime.settings import Settings
 
 
@@ -70,7 +71,7 @@ async def _assemble_with_agent(
     with custom_span(
         "context_assembler_agent",
         {
-            "request_id": request.request_id,
+            "request_id_hash": hash_trace_id(request.request_id),
             "artifact_count": len(artifacts),
             "source": request.source,
             "model": model_name,
@@ -81,7 +82,7 @@ async def _assemble_with_agent(
             json.dumps(payload, ensure_ascii=False),
             run_config=build_run_config(
                 settings,
-                group_id=request.trace_group_id or request.session_id or request.request_id,
+                group_id=f"context:{hash_trace_id(request.trace_group_id or request.session_id or request.request_id)}",
                 metadata={"source": request.source, "stage": "context_assembler"},
             ),
         )
@@ -101,9 +102,7 @@ def deterministic_assemble_unified_case_context(
     visual_summaries = [
         artifact.summary
         for artifact in artifacts
-        if artifact.status == "ok"
-        and artifact.summary
-        and (artifact.vector_id or artifact.artifact_type in {"video_sampling", "visual_summary"})
+        if artifact.status == "ok" and artifact.summary and artifact.artifact_type in {"video_sampling", "visual_summary"}
     ]
     vector_refs = [artifact.vector_id for artifact in artifacts if artifact.status == "ok" and artifact.vector_id]
     asset_refs = [asset.asset_id for asset in request.assets]
@@ -139,6 +138,8 @@ def build_data_source_coverage(
     context: UnifiedCaseContext,
     evidence_pack: SupportEvidencePack,
 ) -> DataSourceCoverage:
+    formal_kb_hit_count = _official_hit_count(evidence_pack, {"official_kb", "policy"})
+    product_doc_hit_count = _official_hit_count(evidence_pack, {"mrd", "manual"})
     items = [
         _coverage_item(
             "sku_catalog",
@@ -152,20 +153,20 @@ def build_data_source_coverage(
         _coverage_item(
             "official_kb",
             "正式知识库",
-            "hit" if evidence_pack.official_hit_count else "missing",
-            "formal" if evidence_pack.official_hit_count else "missing",
-            evidence_pack.official_hit_count,
-            "高" if evidence_pack.official_hit_count else "未知",
-            "正式产品文档/MRD 尚未接入或未命中。" if not evidence_pack.official_hit_count else "已命中正式依据。",
+            "hit" if formal_kb_hit_count else "missing",
+            "formal" if formal_kb_hit_count else "missing",
+            formal_kb_hit_count,
+            "高" if formal_kb_hit_count else "未知",
+            "正式知识库/政策源尚未接入或未命中。" if not formal_kb_hit_count else "已命中正式知识库/政策依据。",
         ),
         _coverage_item(
             "history_faq",
             "群聊历史 FAQ",
             "hit" if evidence_pack.history_hit_count else "miss",
-            "unreviewed",
+            "reviewed" if evidence_pack.history_hit_count else "reviewed",
             evidence_pack.history_hit_count,
-            "中" if evidence_pack.history_hit_count else "低",
-            "当前主要 grounded 数据源；raw 群聊历史需人工确认。",
+            "高" if evidence_pack.history_hit_count else "低",
+            "已审核群聊历史 FAQ；可作为可靠售后参考，但不是正式政策源。",
         ),
         _coverage_item(
             "media_evidence",
@@ -179,11 +180,11 @@ def build_data_source_coverage(
         _coverage_item(
             "product_mrd",
             "产品 MRD/手册",
-            "missing",
-            "missing",
-            0,
-            "未知",
-            "产品 MRD/手册数据源暂未接入。",
+            "hit" if product_doc_hit_count else "missing",
+            "formal" if product_doc_hit_count else "missing",
+            product_doc_hit_count,
+            "高" if product_doc_hit_count else "未知",
+            "产品 MRD/手册数据源暂未接入或未命中。" if not product_doc_hit_count else "已命中产品 MRD/手册依据。",
         ),
     ]
     action, reason = _recommended_action(context, evidence_pack)
@@ -244,13 +245,23 @@ def _coverage_item(
     )
 
 
+def _official_hit_count(evidence_pack: SupportEvidencePack, source_types: set[str]) -> int:
+    return sum(
+        1
+        for item in evidence_pack.official
+        if item.status == "hit" and item.evidence_level == "formal" and item.source_type in source_types
+    )
+
+
 def _recommended_action(context: UnifiedCaseContext, evidence_pack: SupportEvidencePack) -> tuple[str, str]:
     if context.missing_information:
         return "ask_clarification", "输入信息或多模态处理结果不足，需要先补充关键信息。"
     if evidence_pack.has_formal_evidence:
         return "answer", "已命中正式依据，可以给出相对肯定的客服参考。"
-    if evidence_pack.history_hit_count or evidence_pack.media_hit_count:
-        return "answer", "已命中历史或媒体参考，可给出保守参考并标注需人工确认。"
+    if evidence_pack.has_reviewed_history:
+        return "answer", "已命中已审核群聊历史 FAQ，可给出可靠售后参考；高风险售后承诺仍需正式依据或人工复核。"
+    if evidence_pack.media_hit_count:
+        return "human_review", "仅命中媒体观察证据，不能单独支撑处理口径，建议人工复核但不实际艾特负责人。"
     return "human_review", "没有命中可支撑处理口径的数据源，建议人工复核但不实际艾特负责人。"
 
 
@@ -270,13 +281,20 @@ def _missing_information(route: RouteDecision, artifacts: list[IngestionArtifact
     missing = list(route.clarification_questions)
     if not normalized_query.strip():
         missing.append("需要补充售后问题描述。")
+    visual_summary_ok_assets = {
+        artifact.asset_id for artifact in artifacts if artifact.artifact_type == "visual_summary" and artifact.status == "ok"
+    }
     for artifact in artifacts:
         if artifact.status not in {"unsupported", "error"}:
             continue
         if artifact.artifact_type == "ocr":
             missing.append("图片文字内容暂未完成 OCR 识别。")
-        elif artifact.artifact_type in {"image_embedding", "video_sampling"}:
-            missing.append("图片/视频视觉语义结果暂未生成。")
+        elif artifact.artifact_type == "image_embedding":
+            missing.append("图片视觉检索向量暂未生成。")
+        elif artifact.artifact_type == "video_sampling":
+            missing.append("视频关键帧暂未生成。")
+        elif artifact.artifact_type == "visual_summary" and artifact.asset_id not in visual_summary_ok_assets:
+            missing.append("图片/视频视觉理解结果暂未生成。")
     return list(dict.fromkeys(missing))
 
 

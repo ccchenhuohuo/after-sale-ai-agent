@@ -130,10 +130,19 @@ def test_connected_history_requires_review_status_marker():
     assert any(issue.code == "history_evidence" for issue in issues)
 
 
-def test_connected_history_allows_unreviewed_marker():
+def test_connected_history_allows_reviewed_history_marker():
     answer = VALID_EMPTY_EVIDENCE_ANSWER.replace(
         "未查询到可信历史参考，不可编造。",
-        "命中未审核历史参考，需人工确认，不能作为正式依据：thread:abc。",
+        "命中已审核群聊历史 FAQ：thread:abc，可作为可靠售后参考；不是正式政策源。",
+    )
+
+    assert validate_answer_contract(answer, history_connected=True) == []
+
+
+def test_connected_history_allows_reviewed_history_marker_without_space():
+    answer = VALID_EMPTY_EVIDENCE_ANSWER.replace(
+        "未查询到可信历史参考，不可编造。",
+        "命中已审核群聊历史FAQ：thread:abc，可作为可靠售后参考；不是正式政策源。",
     )
 
     assert validate_answer_contract(answer, history_connected=True) == []
@@ -204,6 +213,15 @@ def test_negated_direct_commitment_is_not_reported_but_arranged_processing_is():
     assert any(issue.code == "forbidden_commitment" for issue in validate_answer_contract(arranged))
 
 
+def test_internal_ticket_draft_commitment_wording_does_not_block_visible_answer_contract():
+    answer = VALID_EMPTY_EVIDENCE_ANSWER.replace(
+        "不建议生成工单，并说明原因。",
+        "建议生成工单并提交售后处理。",
+    )
+
+    assert not any(issue.code == "forbidden_commitment" for issue in validate_answer_contract(answer))
+
+
 def test_support_answer_renders_existing_customer_service_format():
     answer = SupportAnswer(
         issue_type="troubleshooting",
@@ -247,6 +265,40 @@ def test_data_source_coverage_caps_model_recommended_action_to_ask_clarification
     applied = apply_data_source_coverage(answer, coverage)
 
     assert applied.recommended_action == "ask_clarification"
+
+
+def test_data_source_coverage_overrides_model_source_lists():
+    answer = _answer_with_action("answer").model_copy(
+        update={
+            "data_sources_used": ["模型自称参考了不存在的数据源"],
+            "missing_data_sources": ["模型自称缺失了错误数据源"],
+        }
+    )
+    coverage = DataSourceCoverage(
+        items=[
+            DataSourceCoverageItem(
+                source_id="history_faq",
+                source_name="群聊历史 FAQ",
+                status="hit",
+                authority="reviewed",
+            ),
+            DataSourceCoverageItem(
+                source_id="product_mrd",
+                source_name="产品 MRD/手册",
+                status="missing",
+                authority="missing",
+            ),
+        ],
+        recommended_action="answer",
+        mention_enabled=False,
+    )
+
+    applied = apply_data_source_coverage(answer, coverage)
+
+    assert applied.data_sources_used == ["群聊历史 FAQ"]
+    assert applied.missing_data_sources == ["产品 MRD/手册"]
+    assert applied.history_reference.startswith("已审核群聊历史 FAQ：")
+    assert validate_answer_contract(render_support_answer(applied), history_connected=True) == []
 
 
 def test_data_source_coverage_keeps_more_conservative_model_action():
@@ -365,14 +417,14 @@ def test_support_answer_contract_uses_evidence_pack_for_history_markers():
         issue_type="quality_issue",
         run_mode="Agent SDK",
         confidence="低",
-        confidence_reason="仅命中未审核历史参考。",
+        confidence_reason="仅命中已审核群聊历史 FAQ。",
         user_issue_summary="客户反馈产品脱落。",
         sku_match="SKU 命中置信度高，处理建议置信度低。",
         suggested_reply="建议先收集信息并人工确认。",
         troubleshooting_steps=["收集图片"],
         follow_up_questions=["请补充订单信息"],
         official_evidence="未查询到可信正式依据，不可编造。",
-        history_reference="命中未审核历史参考，需人工确认，不能作为正式依据：thread:abc。",
+        history_reference="命中已审核群聊历史 FAQ：thread:abc，可作为可靠售后参考；不是正式政策源。",
         ticket_draft="建议生成工单草稿，缺失订单信息。",
     )
     pack = SupportEvidencePack(
@@ -385,8 +437,8 @@ def test_support_answer_contract_uses_evidence_pack_for_history_markers():
         history=[
             HistoryEvidence(
                 status="hit",
-                evidence_level="unreviewed_history",
-                verified=False,
+                evidence_level="reviewed_case",
+                verified=True,
                 query_hash="hash",
                 topic_id="thread:abc",
             )
@@ -394,5 +446,35 @@ def test_support_answer_contract_uses_evidence_pack_for_history_markers():
         media=[],
     )
 
-    assert any(issue.code == "history_evidence" for issue in contract_issues_for_output(answer))
     assert contract_issues_for_output(answer, evidence_pack=pack) == []
+
+
+def test_support_answer_contract_fallback_cannot_claim_history_without_turn_evidence():
+    answer = SupportAnswer(
+        issue_type="quality_issue",
+        run_mode="Agent SDK",
+        confidence="低",
+        confidence_reason="模型声称命中历史，但本轮证据包为空。",
+        user_issue_summary="客户反馈产品脱落。",
+        sku_match="SKU 命中置信度高，处理建议置信度低。",
+        suggested_reply="建议先收集信息并人工确认。",
+        troubleshooting_steps=["收集图片"],
+        follow_up_questions=["请补充订单信息"],
+        official_evidence="未查询到可信正式依据，不可编造。",
+        history_reference="命中已审核群聊历史 FAQ：thread:abc，可作为可靠售后参考；不是正式政策源。",
+        ticket_draft="建议生成工单草稿，缺失订单信息。",
+    )
+    pack = SupportEvidencePack(
+        raw_issue_hash="hash",
+        query_chars=8,
+        issue_type="quality_issue",
+        product_model="",
+        sku=[],
+        official=[],
+        history=[],
+        media=[],
+    )
+
+    issues = contract_issues_for_output(answer, evidence_pack=pack)
+
+    assert any(issue.code == "history_evidence" for issue in issues)

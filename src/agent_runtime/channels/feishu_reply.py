@@ -9,6 +9,7 @@ from agent_runtime.copilot.answer_contract import (
     validate_feishu_visible_reply,
 )
 from agent_runtime.copilot.runtime import SupportRuntimeResult
+from agent_runtime.observability.tracing import span_if_tracing
 
 
 class FeishuVisibleReply(BaseModel):
@@ -27,7 +28,32 @@ class FeishuVisibleReply(BaseModel):
 
 
 def render_feishu_visible_runtime_reply(result: SupportRuntimeResult) -> FeishuVisibleReply:
-    if result.contract_issues:
-        return FeishuVisibleReply(text=FEISHU_VISIBLE_REPLY_FALLBACK, issues=result.contract_issues)
-    text = render_feishu_reply(result.answer)
-    return FeishuVisibleReply(text=text, issues=validate_feishu_visible_reply(text))
+    coverage = getattr(result, "coverage", None)
+    with span_if_tracing(
+        "visible_reply_render",
+        {
+            "recommended_action": getattr(coverage, "recommended_action", ""),
+            "mention_enabled": getattr(coverage, "mention_enabled", False),
+        },
+    ) as trace_span:
+        if result.contract_issues:
+            reply = FeishuVisibleReply(text=FEISHU_VISIBLE_REPLY_FALLBACK, issues=result.contract_issues)
+            fallback_reason = "answer_contract_blocked"
+        else:
+            text = render_feishu_reply(result.answer)
+            reply = FeishuVisibleReply(text=text, issues=validate_feishu_visible_reply(text))
+            fallback_reason = "visible_reply_validation_blocked" if reply.blocked else ""
+        if trace_span is not None:
+            trace_span.span_data.data.update(
+                {
+                    "recommended_action": getattr(coverage, "recommended_action", ""),
+                    "mention_enabled": getattr(coverage, "mention_enabled", False),
+                    "contract_blocked": bool(result.contract_issues),
+                    "visible_reply_fallback_used": reply.blocked,
+                    "fallback_reason": fallback_reason,
+                    "issue_codes": [issue.code for issue in reply.issues],
+                    "reply_chars": len(reply.safe_text),
+                    "output_chars": len(reply.safe_text),
+                }
+            )
+        return reply

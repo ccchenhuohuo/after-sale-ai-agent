@@ -90,12 +90,13 @@ def test_build_history_rag_index_creates_cases_chunks_and_manifest(tmp_path):
     assert first_chunk["topic_id"]
     assert first_chunk["topic_link"]
     assert first_chunk["text"]
-    assert first_chunk["evidence_level"] == "unreviewed_history"
+    assert first_chunk["evidence_level"] == "reviewed_case"
     assert first_chunk["can_be_formal_evidence"] is False
+    assert first_chunk["is_reviewed"] is True
     assert (output_dir / "embeddings.npy").exists()
 
 
-def test_search_history_rag_returns_unreviewed_reference(tmp_path):
+def test_search_history_rag_returns_reviewed_reference(tmp_path):
     module = load_builder_module()
     staging_dir = tmp_path / "staging"
     output_dir = tmp_path / "index"
@@ -111,7 +112,7 @@ def test_search_history_rag_returns_unreviewed_reference(tmp_path):
 
     result = search_history_rag("TB15 胶水失效 PJ01 补发", product_model="TB15", settings=settings)
 
-    assert "未审核历史参考" in result
+    assert "已审核群聊历史 FAQ" in result
     assert "thread:tb15" in result
     assert "https://feishu.test/tb15" in result
     assert "相似度" in result

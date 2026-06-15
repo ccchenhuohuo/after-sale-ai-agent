@@ -119,6 +119,7 @@ async def _schedule_websocket_payload(
     semaphore: asyncio.Semaphore,
     bot_identity: BotIdentity,
 ) -> str:
+    payload["_agent_runtime_event_source"] = "sdk"
     admission = _websocket_payload_admission(payload, bot_identity)
     if not admission.accepted:
         event = admission.event
@@ -178,6 +179,7 @@ async def _backfill_once(
         payloads = await fetch_recent_chat_messages(settings)
     stats = BackfillStats(fetched_count=len(payloads))
     for payload in payloads:
+        payload["_agent_runtime_event_source"] = "backfill"
         admission = _backfill_payload_admission(payload, settings, bot_identity)
         stats.record(admission.status)
         if not admission.accepted:

@@ -43,6 +43,10 @@ def settings_for_tmp(tmp_path, **overrides):
     return Settings(**values)
 
 
+def issue_text_len(raw_issue) -> int:
+    return len(getattr(raw_issue, "normalized_query", raw_issue))
+
+
 class FakeStreamResponse:
     def __init__(self, status_code=200, *, chunks=(), headers=None):
         self.status_code = status_code
@@ -221,6 +225,8 @@ def test_feishu_adapter_converts_image_message_to_support_asset(tmp_path):
     assert len(request.assets) == 1
     assert request.assets[0].media_type == "image"
     assert request.assets[0].file_key == "img_v3_abc"
+    assert request.assets[0].asset_id.startswith("feishu_asset:")
+    assert "img_v3_abc" not in request.assets[0].asset_id
     assert request.assets[0].message_id == "om_img"
 
 
@@ -247,6 +253,8 @@ def test_feishu_adapter_converts_video_message_to_support_asset(tmp_path):
     assert len(request.assets) == 1
     assert request.assets[0].media_type == "video"
     assert request.assets[0].file_key == "video_v3_abc"
+    assert request.assets[0].asset_id.startswith("feishu_asset:")
+    assert "video_v3_abc" not in request.assets[0].asset_id
 
 
 def test_feishu_asset_downloader_sets_local_path(monkeypatch, tmp_path):
@@ -652,8 +660,11 @@ def test_webhook_verification_token_requires_present_match():
         _verify_token({}, settings)
     with pytest.raises(HTTPException) as wrong:
         _verify_token({"token": "wrong"}, settings)
+    with pytest.raises(HTTPException) as unconfigured:
+        _verify_token({"token": "anything"}, Settings())
     assert missing.value.status_code == 403
     assert wrong.value.status_code == 403
+    assert unconfigured.value.status_code == 403
 
 
 def test_admission_falls_back_to_bot_name(tmp_path):
@@ -1215,7 +1226,7 @@ def test_feishu_agent_session_uses_persistent_db(monkeypatch, tmp_path):
 
         return SupportEvidencePack(
             raw_issue_hash="hash",
-            query_chars=len(raw_issue),
+            query_chars=issue_text_len(raw_issue),
             issue_type="unknown",
             product_model="",
             sku=[],
@@ -1277,7 +1288,7 @@ def test_feishu_agent_returns_visible_natural_reply(monkeypatch, tmp_path):
 
         return SupportEvidencePack(
             raw_issue_hash="hash",
-            query_chars=len(raw_issue),
+            query_chars=issue_text_len(raw_issue),
             issue_type="unknown",
             product_model="",
             sku=[],
@@ -1338,7 +1349,7 @@ def test_feishu_agent_visible_validation_uses_safe_fallback(monkeypatch, tmp_pat
 
         return SupportEvidencePack(
             raw_issue_hash="hash",
-            query_chars=len(raw_issue),
+            query_chars=issue_text_len(raw_issue),
             issue_type="unknown",
             product_model="",
             sku=[],

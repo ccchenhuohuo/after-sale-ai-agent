@@ -36,6 +36,8 @@ def test_smoke_report_contains_replayable_pipeline_shape():
         assert scenario["route"]["input_modality"]
         assert scenario["ingestion_artifacts"]
         assert scenario["context"]["normalized_query"]
+        assert "visual_summary_status" in scenario["context"]
+        assert "visual_summary_excerpt" in scenario["context"]
         assert "recommended_action" in scenario["coverage"]
         assert "recommended_action" in scenario["final_answer"]
         assert scenario["coverage"]["mention_enabled"] is False
@@ -53,6 +55,10 @@ def test_smoke_report_contains_replayable_pipeline_shape():
         artifact["artifact_type"] == "image_embedding" and artifact["status"] == "unsupported"
         for artifact in rejected["ingestion_artifacts"]
     )
+
+    damage = _scenario(report, "smoke_damage_image")
+    assert damage["context"]["visual_summary_status"] == "ok"
+    assert "疑似划痕或裂痕" in damage["context"]["visual_summary_excerpt"]
 
     serialized = json.dumps(report, ensure_ascii=False)
     assert "/etc/passwd" not in serialized

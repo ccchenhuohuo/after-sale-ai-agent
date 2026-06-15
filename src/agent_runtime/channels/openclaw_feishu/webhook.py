@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+from agents import flush_traces
 from fastapi import APIRouter, Header, HTTPException
 
 from agent_runtime.channels.openclaw_feishu.adapter import (
@@ -14,6 +15,7 @@ from agent_runtime.copilot.answer_contract import SupportAnswer
 from agent_runtime.copilot.case_context import SupportCaseRequest
 from agent_runtime.copilot.runtime import build_support_runtime_session, run_support_case_request
 from agent_runtime.llm import configure_agents_runtime
+from agent_runtime.observability.tracing import base_trace_attrs, runtime_trace
 from agent_runtime.settings import Settings, get_settings
 
 
@@ -27,7 +29,8 @@ async def openclaw_feishu_health() -> dict[str, Any]:
         "ok": True,
         "channel": "openclaw_feishu",
         "runtime": "support_copilot",
-        "requiresSecret": bool(settings.openclaw_feishu_bridge_secret),
+        "requiresSecret": settings.openclaw_feishu_require_secret or bool(settings.openclaw_feishu_bridge_secret),
+        "secretConfigured": bool(settings.openclaw_feishu_bridge_secret),
     }
 
 
@@ -45,14 +48,35 @@ async def openclaw_feishu_support_case(
 
     settings = configure_agents_runtime(settings)
     session = build_support_runtime_session(settings, request.session_id or request.request_id)
-    result = await run_support_case_request(
-        request,
-        settings,
-        entrypoint="openclaw_feishu",
-        source_label="OpenClaw 飞书客服话题群",
-        session=session,
-    )
-    return build_openclaw_thread_reply(result)
+    raw_group_id = request.trace_group_id or request.session_id or request.request_id
+    group_id = f"openclaw:{_hash_id(raw_group_id)}"
+    try:
+        with runtime_trace(
+            settings,
+            entrypoint="openclaw_feishu",
+            group_id=group_id,
+            attrs=_runtime_trace_attrs(request, group_id=group_id),
+        ):
+            result = await run_support_case_request(
+                request,
+                settings,
+                entrypoint="openclaw_feishu",
+                source_label="OpenClaw 飞书客服话题群",
+                session=session,
+                run_config_group_id=group_id,
+                run_config_metadata={
+                    "source": "openclaw-feishu-channel",
+                    "chat_id_hash": _hash_id(request.chat_id),
+                    "thread_id_hash": _hash_id(request.thread_id),
+                    "message_id_hash": _hash_id(request.message_id),
+                    "sender_id_hash": _hash_id(request.sender_id),
+                    "session_id_hash": _hash_id(request.session_id or group_id),
+                    "input_chars": len(request.user_text or ""),
+                },
+            )
+            return build_openclaw_thread_reply(result)
+    finally:
+        flush_traces()
 
 
 def _contract_only_result(request: SupportCaseRequest) -> SimpleNamespace:
@@ -94,14 +118,43 @@ def _request_from_payload(payload: dict[str, Any]) -> SupportCaseRequest:
     return build_support_case_request_from_openclaw(payload)
 
 
+def _runtime_trace_attrs(request: SupportCaseRequest, *, group_id: str) -> dict[str, object]:
+    return base_trace_attrs(
+        trace_kind="runtime",
+        entrypoint="openclaw_feishu",
+        event_source="openclaw",
+        event_status="processing",
+        request_id=request.request_id,
+        session_id=request.session_id,
+        chat_id=request.chat_id,
+        thread_id=request.thread_id,
+        message_id=request.message_id,
+        extra={
+            "trace_group_id": group_id,
+            "source": "openclaw-feishu-channel",
+            "loop_version": "v2",
+            "asset_count": len(request.assets),
+            "input_chars": len(request.user_text or ""),
+        },
+    )
+
+
 def _verify_openclaw_secret(
     settings: Settings,
     authorization: str | None,
     x_openclaw_feishu_secret: str | None,
 ) -> None:
     if not settings.openclaw_feishu_bridge_secret:
+        if settings.openclaw_feishu_require_secret:
+            raise HTTPException(status_code=403, detail="OpenClaw Feishu bridge secret is required")
         return
     bearer = f"Bearer {settings.openclaw_feishu_bridge_secret}"
     if authorization == bearer or x_openclaw_feishu_secret == settings.openclaw_feishu_bridge_secret:
         return
     raise HTTPException(status_code=403, detail="invalid OpenClaw Feishu bridge secret")
+
+
+def _hash_id(value: str) -> str:
+    from agent_runtime.observability.tracing import hash_trace_id
+
+    return hash_trace_id(value)

@@ -125,6 +125,6 @@ def test_search_issue_history_text_returns_hybrid_evidence_package(tmp_path, mon
     assert "SKU：TB15" in result
     assert "文本历史参考：" in result
     assert "媒体观察证据：" in result
-    assert "未审核历史参考" in result
+    assert "已审核群聊历史 FAQ" in result
     assert "未审核媒体观察证据" in result
     assert "thread:tb15" in result

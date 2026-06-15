@@ -121,6 +121,10 @@ class SupportEvidencePack:
     def has_formal_evidence(self) -> bool:
         return any(item.evidence_level == "formal" and item.status == "hit" for item in self.official)
 
+    @property
+    def has_reviewed_history(self) -> bool:
+        return any(item.evidence_level == "reviewed_case" and item.status == "hit" for item in self.history)
+
 
 def _hit_count(items: list[object]) -> int:
     return sum(1 for item in items if getattr(item, "status", "") == "hit")
@@ -206,7 +210,8 @@ def render_evidence_pack(pack: SupportEvidencePack) -> str:
             "证据边界：",
             "- SKU 识别只用于产品身份、SPU、品名和负责人流转，不能作为故障原因或售后政策依据。",
             "- 正式依据只有 evidence_level=formal 且 verified=true 时，才能作为技术结论或政策依据。",
-            "- 未审核历史参考和未审核媒体观察证据必须标注需人工确认，不能作为正式依据。",
+            "- 已审核群聊历史 FAQ 是可靠售后参考，可用于客服排查与历史处理经验；它不是正式政策源，不能覆盖正式 KB/MRD/SOP。",
+            "- 未审核媒体观察证据必须标注需人工确认，不能作为正式依据。",
             "- 退款、赔偿、换新、补发、维修时效或最终判责，必须等待正式依据或人工复核。",
         ]
     )
@@ -223,4 +228,5 @@ def evidence_pack_trace_attributes(pack: SupportEvidencePack) -> dict[str, objec
         "history_hit_count": pack.history_hit_count,
         "media_hit_count": pack.media_hit_count,
         "has_formal_evidence": pack.has_formal_evidence,
+        "has_reviewed_history": pack.has_reviewed_history,
     }

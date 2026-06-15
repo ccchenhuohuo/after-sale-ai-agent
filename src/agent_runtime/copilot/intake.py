@@ -14,6 +14,7 @@ from agent_runtime.copilot.case_context import (
 )
 from agent_runtime.copilot.llm_payloads import safe_asset_payload_for_llm
 from agent_runtime.llm import build_run_config
+from agent_runtime.observability.tracing import hash_trace_id
 from agent_runtime.settings import Settings
 
 
@@ -72,7 +73,7 @@ async def _route_with_agent(request: SupportCaseRequest, settings: Settings) -> 
     with custom_span(
         "intake_router_agent",
         {
-            "request_id": request.request_id,
+            "request_id_hash": hash_trace_id(request.request_id),
             "asset_count": len(request.assets),
             "source": request.source,
             "model": model_name,
@@ -83,7 +84,7 @@ async def _route_with_agent(request: SupportCaseRequest, settings: Settings) -> 
             json.dumps(payload, ensure_ascii=False),
             run_config=build_run_config(
                 settings,
-                group_id=request.trace_group_id or request.session_id or request.request_id,
+                group_id=f"intake:{hash_trace_id(request.trace_group_id or request.session_id or request.request_id)}",
                 metadata={"source": request.source, "stage": "intake_router"},
             ),
         )

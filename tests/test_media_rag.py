@@ -3,6 +3,8 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
+
 from agent_runtime.settings import Settings
 from agent_runtime.tools import media_rag
 from agent_runtime.tools.media_rag import search_media_rag
@@ -197,6 +199,55 @@ def test_search_media_rag_returns_unreviewed_media_evidence(tmp_path):
     assert "https://feishu.test/tb15" in result
     assert "相似度" in result
     assert "重排分" in result
+
+
+def test_search_media_rag_uses_query_vector_refs(tmp_path):
+    output_dir = tmp_path / "index"
+    vector_dir = tmp_path / "vectors"
+    output_dir.mkdir()
+    vector_dir.mkdir()
+    chunks = [
+        {
+            "chunk_id": "media_a",
+            "topic_id": "thread:a",
+            "topic_link": "https://feishu.test/a",
+            "sku": "A001",
+            "media_type": "image",
+            "media_id": "img_a",
+            "text": "A001 普通图片，不相关。",
+        },
+        {
+            "chunk_id": "media_b",
+            "topic_id": "thread:b",
+            "topic_link": "https://feishu.test/b",
+            "sku": "B002",
+            "media_type": "image",
+            "media_id": "img_b",
+            "text": "B002 产品损坏图片。",
+        },
+    ]
+    (output_dir / "media_chunks.jsonl").write_text(
+        "\n".join(json.dumps(chunk, ensure_ascii=False) for chunk in chunks),
+        encoding="utf-8",
+    )
+    (output_dir / "manifest.json").write_text(json.dumps({"source": "test"}, ensure_ascii=False), encoding="utf-8")
+    np.save(output_dir / "media_embeddings.npy", np.asarray([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]], dtype=np.float32))
+    np.save(vector_dir / "vec_query_damage.npy", np.asarray([[0.0, 1.0, 0.0, 0.0]], dtype=np.float32))
+    settings = Settings(
+        media_rag_index_path=str(output_dir),
+        media_rag_provider="local_hash",
+        media_rag_embedding_dimension=4,
+        media_rag_top_k=2,
+        media_rag_top_n=1,
+        support_vector_artifact_dir=str(vector_dir),
+    )
+
+    result = search_media_rag("完全不相关文本", settings=settings, vector_refs=["vec_query_damage"])
+
+    assert "thread:b" in result
+    assert "thread:a" not in result
+    assert "视觉向量引用命中" in result
+    assert "检索通道：视觉向量" in result
 
 
 def test_search_media_rag_does_not_fallback_to_unrelated_product(tmp_path):

@@ -5,6 +5,7 @@ from agent_runtime.copilot.case_context import SupportCaseRequest
 from agent_runtime.copilot.evidence import short_hash
 from agent_runtime.copilot.runtime import run_support_case_request
 from agent_runtime.llm import build_run_config
+from agent_runtime.observability.tracing import base_trace_attrs, runtime_trace
 from agent_runtime.terminal.session import session_items_to_text
 from agent_runtime.terminal.ui import active_model_label, cyan, dim, green, yellow
 
@@ -60,27 +61,35 @@ async def compact_context(settings, session: SQLiteSession) -> None:
 
 async def run_turn(agent, settings, session: SQLiteSession, user_input: str) -> None:
     print(dim("\nAgent 正在分析..."))
+    request = SupportCaseRequest(
+        request_id=f"terminal:{short_hash(user_input)}",
+        source="terminal",
+        channel="terminal",
+        source_platform="terminal",
+        user_text=user_input,
+        trace_group_id="terminal-chat",
+    )
     try:
-        request = SupportCaseRequest(
-            request_id=f"terminal:{short_hash(user_input)}",
-            source="terminal",
-            channel="terminal",
-            source_platform="terminal",
-            user_text=user_input,
-            trace_group_id="terminal-chat",
-        )
-        runtime_result = await run_support_case_request(
-            request,
+        with runtime_trace(
             settings,
             entrypoint="terminal",
-            source_label="本地终端",
-            session=session,
-            run_config_group_id="terminal-chat",
-            run_config_metadata={
-                "source": "terminal-chat",
-                "model_label": active_model_label(settings),
-            },
-        )
+            group_id="terminal-chat",
+            attrs=_terminal_trace_attrs(request, settings),
+        ):
+            runtime_result = await run_support_case_request(
+                request,
+                settings,
+                entrypoint="terminal",
+                source_label="本地终端",
+                session=session,
+                run_config_group_id="terminal-chat",
+                run_config_metadata={
+                    "source": "terminal-chat",
+                    "model_label": active_model_label(settings),
+                    "session_id_hash": short_hash("terminal-chat"),
+                    "input_chars": len(user_input or ""),
+                },
+            )
         final_output = runtime_result.internal_text
         contract_issues = runtime_result.contract_issues
         _ = agent
@@ -91,6 +100,9 @@ async def run_turn(agent, settings, session: SQLiteSession, user_input: str) -> 
             print(f"- {message}")
         print("")
         return
+    except Exception:
+        flush_traces()
+        raise
 
     flush_traces()
     print("\n" + cyan("─" * 78))
@@ -114,3 +126,21 @@ def _guardrail_messages(exc: OutputGuardrailTripwireTriggered) -> list[str]:
         if messages:
             return messages
     return ["输出不符合售后安全边界，请人工处理。"]
+
+
+def _terminal_trace_attrs(request: SupportCaseRequest, settings) -> dict[str, object]:
+    return base_trace_attrs(
+        trace_kind="runtime",
+        entrypoint="terminal",
+        event_source="terminal",
+        event_status="processing",
+        request_id=request.request_id,
+        session_id=request.session_id or "terminal-chat",
+        extra={
+            "trace_group_id": "terminal-chat",
+            "source": "terminal-chat",
+            "loop_version": "v2",
+            "model_label": active_model_label(settings),
+            "input_chars": len(request.user_text or ""),
+        },
+    )

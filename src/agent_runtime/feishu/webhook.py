@@ -19,7 +19,7 @@ app.include_router(openclaw_feishu_router)
 
 def _verify_token(payload: dict[str, Any], settings: Settings) -> None:
     if not settings.feishu_verification_token:
-        return
+        raise HTTPException(status_code=403, detail="FEISHU_VERIFICATION_TOKEN is required for webhook requests")
     header = payload.get("header") if isinstance(payload.get("header"), dict) else {}
     token = payload.get("token") or header.get("token")
     if not token or token != settings.feishu_verification_token:
@@ -33,8 +33,12 @@ def _verify_signature(
     nonce: str | None,
     signature: str | None,
 ) -> None:
-    if not settings.feishu_encrypt_key or not signature:
+    if not settings.feishu_encrypt_key:
         return
+    if not signature:
+        raise HTTPException(status_code=403, detail="missing Feishu signature")
+    if not timestamp or not nonce:
+        raise HTTPException(status_code=403, detail="missing Feishu signature headers")
     sign_text = f"{timestamp or ''}{nonce or ''}{settings.feishu_encrypt_key}{raw_body.decode()}".encode()
     expected = hashlib.sha256(sign_text).hexdigest()
     if not hmac.compare_digest(expected, signature):

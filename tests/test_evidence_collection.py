@@ -1,6 +1,7 @@
 import asyncio
 
 from agent_runtime.copilot import evidence_collection
+from agent_runtime.copilot.case_context import RouteDecision, UnifiedCaseContext
 from agent_runtime.copilot.evidence import (
     HistoryEvidence,
     MediaEvidence,
@@ -32,7 +33,7 @@ def test_collect_support_evidence_returns_structured_pack(monkeypatch):
             )
         ]
 
-    def fake_official(query, product_model=None, module=None, issue_type=None):
+    def fake_official(query, product_model=None, module=None, issue_type=None, settings=None):
         return [
             OfficialKbEvidence(
                 status="empty",
@@ -48,16 +49,17 @@ def test_collect_support_evidence_returns_structured_pack(monkeypatch):
         return [
             HistoryEvidence(
                 status="hit",
-                evidence_level="unreviewed_history",
-                verified=False,
+                evidence_level="reviewed_case",
+                verified=True,
                 query_hash="history-hash",
                 topic_id="thread:tb15",
-                message="命中未审核历史参考，需人工确认，不能作为正式依据：thread:tb15。",
+                message="命中已审核群聊历史 FAQ：thread:tb15。",
             )
         ]
 
-    def fake_media(query, product_model=None, settings=None):
+    def fake_media(query, product_model=None, settings=None, vector_refs=None):
         assert product_model == "TB15"
+        assert vector_refs == []
         return [
             MediaEvidence(
                 status="empty",
@@ -82,7 +84,7 @@ def test_collect_support_evidence_returns_structured_pack(monkeypatch):
     assert pack.history_hit_count == 1
     rendered = render_evidence_pack(pack)
     assert "结构化证据包" in rendered
-    assert "未审核历史参考" in rendered
+    assert "已审核群聊历史 FAQ" in rendered
 
 
 def test_collect_support_evidence_isolates_branch_errors(monkeypatch):
@@ -102,7 +104,7 @@ def test_collect_support_evidence_isolates_branch_errors(monkeypatch):
     monkeypatch.setattr(
         evidence_collection,
         "search_official_kb_evidence",
-        lambda query, product_model=None, module=None, issue_type=None: [
+        lambda query, product_model=None, module=None, issue_type=None, settings=None: [
             OfficialKbEvidence(
                 status="empty",
                 evidence_level="empty",
@@ -120,7 +122,7 @@ def test_collect_support_evidence_isolates_branch_errors(monkeypatch):
     monkeypatch.setattr(
         evidence_collection,
         "search_media_evidence",
-        lambda query, product_model=None, settings=None: [
+        lambda query, product_model=None, settings=None, vector_refs=None: [
             MediaEvidence(
                 status="empty",
                 evidence_level="empty",
@@ -141,3 +143,73 @@ def test_collect_support_evidence_isolates_branch_errors(monkeypatch):
 
 async def collect_for_test(raw_issue: str, settings: Settings):
     return await evidence_collection.collect_support_evidence(raw_issue, settings)
+
+
+def test_collect_support_evidence_passes_context_vector_refs_to_media(monkeypatch):
+    seen_vector_refs = []
+
+    monkeypatch.setattr(
+        evidence_collection,
+        "resolve_sku_evidence",
+        lambda query, limit=5, settings=None: [
+            SkuEvidence(
+                status="empty",
+                evidence_level="empty",
+                verified=False,
+                query_hash="sku-hash",
+                message="未在SKU目录中命中。",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        evidence_collection,
+        "search_official_kb_evidence",
+        lambda query, product_model=None, module=None, issue_type=None, settings=None: [
+            OfficialKbEvidence(
+                status="empty",
+                evidence_level="empty",
+                verified=False,
+                query_hash="official-hash",
+                message="未查询到可信正式依据。",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        evidence_collection,
+        "search_history_evidence",
+        lambda query, product_model=None, issue_type=None, settings=None: [
+            HistoryEvidence(
+                status="empty",
+                evidence_level="empty",
+                verified=False,
+                query_hash="history-hash",
+                message="未查询到可信历史参考。",
+            )
+        ],
+    )
+
+    def fake_media(query, product_model=None, settings=None, vector_refs=None):
+        seen_vector_refs.extend(vector_refs or [])
+        return [
+            MediaEvidence(
+                status="empty",
+                evidence_level="empty",
+                verified=False,
+                query_hash="media-hash",
+                message="未查询到可信媒体观察证据。",
+            )
+        ]
+
+    monkeypatch.setattr(evidence_collection, "search_media_evidence", fake_media)
+    context = UnifiedCaseContext(
+        request_id="req-vector",
+        source="feishu",
+        original_user_text="客户发了产品损坏图片",
+        normalized_query="客户发了产品损坏图片",
+        vector_refs=["vec_damage_ref"],
+        route=RouteDecision(input_modality="image", confidence=0.8),
+    )
+
+    asyncio.run(evidence_collection.collect_support_evidence(context, Settings()))
+
+    assert seen_vector_refs == ["vec_damage_ref"]

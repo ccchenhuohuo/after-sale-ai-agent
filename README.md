@@ -16,22 +16,25 @@ flowchart TB
     bridge --> intake
     openclaw_channel --> intake
     channel --> intake
-    intake --> evidence["support evidence collector<br/>SKU / 正式 KB / 历史 / 媒体"]
+    intake --> ingestion["intake / ingestion<br/>OCR / image embedding / VL understanding"]
+    ingestion --> context["UnifiedCaseContext<br/>文本 / OCR / 视觉摘要 / vector_id"]
+    context --> evidence["support evidence collector<br/>SKU / 正式 KB / 历史 / 媒体"]
     evidence --> agent["ulanzi after-sell copilot<br/>OpenAI Agents SDK"]
     bridge --> reply["SDK im.v1.message.areply<br/>reply_in_thread"]
     openclaw_channel --> openclaw_reply["OpenClaw thread reply payload"]
     evidence --> sku["SKU 目录<br/>SKU / SPU / 负责人"]
-    evidence --> official["正式知识库<br/>尚未接入"]
-    evidence --> history["历史话题 RAG<br/>未审核历史参考"]
+    evidence --> official["正式 KB/MRD/手册<br/>文件索引 V1"]
+    evidence --> history["群聊历史 FAQ RAG<br/>已审核可靠参考"]
     evidence --> media["媒体观察证据<br/>未审核媒体参考"]
     agent --> answer["Pydantic 结构化客服参考答案<br/>output guardrail + 双层渲染"]
 ```
 
 运行规则：
 
+- 开发与部署基准见 [docs/development-baseline.md](docs/development-baseline.md)：GitHub 是唯一长期代码基准；服务器 `/opt/agent-runtime-dev` 是 Agent Runtime dev 开发工作区；服务器 `/opt/agent-runtime` 是 Agent Runtime 生产部署目录；本地工作区只做轻量调试和快速验证。
 - 终端和 legacy 飞书 SDK 长连接是当前稳定交互入口。
 - OpenClaw Feishu sidecar path 已提供 compatibility endpoint 和 contract smoke，用于下一阶段替代 legacy 飞书通道；真实飞书群 E2E 需要凭证环境验证。
-- OpenClaw Feishu 消息入口默认开放处理；`OPENCLAW_FEISHU_BRIDGE_SECRET` 仅作为可选额外 header 校验，不是飞书消息处理的必要条件。
+- OpenClaw Feishu HTTP compatibility endpoint 默认要求 `OPENCLAW_FEISHU_BRIDGE_SECRET`；生产建议只绑定 localhost，由 sidecar 通过 header 调用。legacy 飞书长连接仍是当前主入口。
 - Core Support Runtime 只消费 `SupportCaseRequest` 并输出 `SupportRuntimeResult`，不 import 飞书 SDK、OpenClaw 或 channel 模块。
 - 新 IM 平台通过独立 `channels/<platform>/adapter.py` / `responder.py` 接入同一个 Core Runtime，不复制 Agent 编排。
 - Legacy 飞书链路只使用官方 Python SDK，不依赖额外命令行桥接工具。
@@ -44,11 +47,12 @@ flowchart TB
 - 旧 Web Demo 和通用公开 HTTP API 不作为当前运行入口；保留的 HTTP 面只用于受控 channel compatibility endpoint。legacy 飞书生产链路仍不使用公网 webhook。
 - 旧的本地确定性匹配分析器和演示种子知识已经从运行时移除。
 - `search_sku_catalog` 使用 `data/sku_catalog/` 下的真实合并 SKU 目录。
-- 正式知识库工具当前返回明确的“未查询到可信正式依据”。
-- `search_issue_history` 已接入飞书 raw JSON 历史话题 RAG，但只作为未审核历史参考，不能作为正式依据、政策依据或客户承诺依据。
+- 正式知识库工具已接入文件型正式源索引 V1；索引缺失或未命中时返回明确的“未查询到可信正式依据”。
+- `search_issue_history` 已接入群聊历史 FAQ RAG。进入索引的群聊历史 FAQ 默认已审核，可作为可靠售后参考；它不是正式政策源，不能覆盖正式 KB/MRD/SOP，也不能单独支撑退款、换新、补发或最终判责承诺。
 - 当前 v2 loop 由 runtime 先构造 `SupportCaseRequest`，经过 intake route、ingestion artifact 和 `UnifiedCaseContext` 后，再调用 `collect_support_evidence()` 并发收集 SKU、正式依据、历史参考和媒体观察证据，最后把统一上下文、数据源覆盖和结构化证据包交给 Agent 生成 `SupportAnswer`。
-- 附件进入 OCR、视觉 embedding 或 ffmpeg 前必须通过本地目录/URL host 白名单校验。默认只信任 legacy 飞书下载缓存；OpenClaw sidecar 的下载目录需要通过 `SUPPORT_ASSET_ALLOWED_LOCAL_DIRS` 显式加入。
-- v1 会生成并引用输入图片的 `vector_id`，但多模态 vector retrieval 尚未接入；当前检索仍主要基于 `UnifiedCaseContext.normalized_query`。
+- 附件进入 OCR、视觉 embedding、VL understanding 或 ffmpeg 前必须通过本地目录/URL host 白名单校验；视频在 ffmpeg 抽帧前还会做 magic-byte/ffprobe preflight。默认只信任 legacy 飞书下载缓存；OpenClaw sidecar 的下载目录需要通过 `SUPPORT_ASSET_ALLOWED_LOCAL_DIRS` 显式加入。
+- 视觉链路分为三层：OCR 只提取截图/铭牌/报错图中的文字；`qwen3-vl-embedding` 只生成 `vector_id` 参与媒体检索；VL understanding 使用千问 VL 把产品图、损坏图、包装图和视频关键帧整理成结构化视觉摘要并注入上下文。
+- v1 会生成并引用输入图片的 `vector_id`；media retrieval 会从 vector artifact store 读取 query vector，与媒体索引向量合并检索。raw vector 不进入 Agent prompt 或可见回复。
 - Agent 最终输出经过 SDK output guardrail 和本地答案 contract 校验；终端保留中文 11 字段调试格式，飞书群可见回复会再渲染成面向客服同事的自然中文。
 - 答案不得编造正式文档、历史案例、链接、负责人、政策或技术结论。
 
@@ -93,6 +97,16 @@ sidecar 环境样例和真实飞书群验收清单位于 `deploy/openclaw_sideca
 
 开发时也可以继续使用 `make chat`，它底层同样运行 `agent_mvp.py`。
 
+## 开发与部署基准
+
+本项目后续按 [Development Baseline](docs/development-baseline.md) 执行：
+
+- GitHub 上的已提交代码是唯一长期代码真相。
+- 服务器 `/opt/agent-runtime-dev` 是主要开发工作区，必须是 Git checkout，用于编码、测试、commit 和 push。
+- 服务器 `/opt/agent-runtime` 是生产部署目录，只部署已提交并通过 smoke/pytest 的 revision。
+- 本地工作区只用于简单调试、阅读文档和快速验证；需要保留的本地修改必须进入 Git 分支并推送。
+- 生产部署后必须更新 `.deploy-revision`，并在服务器生产目录运行 `make smoke` 和关键 pytest。
+
 终端命令：
 
 - `/model`：在 Flash 和 Pro 预设之间切换。
@@ -114,13 +128,24 @@ SUPPORT_AGENT_BILLING_MODE=API Usage Billing
 SUPPORT_INTAKE_ROUTER_ENABLED=false
 SUPPORT_CONTEXT_ASSEMBLER_ENABLED=false
 SUPPORT_OCR_PROVIDER=disabled
+SUPPORT_VISUAL_UNDERSTANDING_PROVIDER=disabled
+SUPPORT_VISUAL_UNDERSTANDING_MODEL=qwen-vl-plus
+SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=false
 SUPPORT_VECTOR_INDEX_NAMESPACE=after_sales_v1
 SUPPORT_ASSET_ALLOWED_LOCAL_DIRS=
 SUPPORT_ASSET_ALLOWED_URL_HOSTS=
 SUPPORT_ASSET_INPUT_MAX_BYTES=25000000
+OPENCLAW_FEISHU_REQUIRE_SECRET=true
+OPENCLAW_FEISHU_BRIDGE_SECRET=replace-with-sidecar-secret
+FORMAL_KB_SOURCE_DIR=data/formal_kb/source
+FORMAL_KB_INDEX_PATH=data/formal_kb/index/latest
+FORMAL_KB_PROVIDER=local_hash
+FORMAL_KB_REQUIRE_REMOTE_MODELS=false
 ```
 
 `LLM_API_KEY` 只用于实际模型调用，例如 DeepSeek 的 OpenAI-compatible endpoint。`OPENAI_TRACING_API_KEY` 只用于向 OpenAI Platform 导出 Agents SDK traces；当使用非 OpenAI 模型且开启 tracing 时，两者应分开配置。
+
+生产 tracing 默认只记录 hash、长度、状态和延迟，不写用户原文、原始飞书/OpenClaw ID、file key、local path、URL 或 raw vector。确需复盘明文时，只在受控本地/临时测试环境打开 `SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=true`。
 
 飞书桥接至少需要以下配置：
 
@@ -179,13 +204,15 @@ Agent 内部结构化输出和终端调试输出必须按以下顺序保留字�
 - `src/agent_runtime/copilot/`：Agent prompt、结构化答案 contract、case/context schema、intake router、ingestion pipeline、context assembler、证据包模型和 evidence collector。
 - `src/agent_runtime/feishu/`：飞书 SDK 长连接、入站 gate、SQLite runtime store、per-thread queue 和线程内回复。
 - `src/agent_runtime/tools/sku_catalog.py`：合并 SKU 目录查询。
-- `src/agent_runtime/tools/rag.py`：正式知识库检索占位和混合证据打包入口，统一返回 SKU 精准匹配、文本历史参考和媒体观察证据。
-- `src/agent_runtime/tools/history_rag.py`：读取本地历史话题索引，调用阿里云百炼 `text-embedding-v4` / `qwen3-rerank`。
-- `src/agent_runtime/tools/media_rag.py`：读取媒体观察证据索引，对已下载图片使用 `qwen3-vl-embedding` / `qwen3-vl-rerank`，未下载媒体保留元数据 fallback。
+- `src/agent_runtime/tools/rag.py`：正式源、历史 FAQ 和媒体观察证据的结构化 evidence 入口。
+- `src/agent_runtime/tools/formal_kb.py`：读取正式 KB/MRD/手册/政策文件索引，命中后返回 `evidence_level=formal`。
+- `src/agent_runtime/tools/history_rag.py`：读取本地已审核群聊历史 FAQ 索引，调用阿里云百炼 `text-embedding-v4` / `qwen3-rerank`。
+- `src/agent_runtime/tools/media_rag.py`：读取媒体观察证据索引，对已下载图片使用 `qwen3-vl-embedding` / `qwen3-vl-rerank`，并支持 intake `vector_id` 参与媒体向量检索。
 - `src/agent_runtime/tools/ticket.py`：需要人工确认的工单草稿工具。
 - `src/agent_runtime/llm.py`：Agents SDK 模型和 tracing 配置。
 - `scripts/build_sku_support_catalog.py`：将产品表和 SKU 表合并为客服场景使用的 SKU 匹配目录。
 - `scripts/build_history_rag_index.py`：从飞书 raw topic JSON 构建文本历史话题索引。
+- `scripts/build_formal_kb_index.py`：从 `data/formal_kb/source/` 下的 Markdown/TXT/JSONL 构建正式 KB/MRD/手册/政策文件索引。
 - `scripts/build_media_evidence_index.py`：从飞书 raw media 元数据和话题上下文构建媒体观察证据索引；`--provider bailian_vl` 会对本地图片生成多模态融合向量。
 - `scripts/ingest_feishu_support_data.py`：飞书 IM 到 Base 的采集工具；不再生成本地规则式处理建议。
 - `docs/sku-support-catalog.md`：SKU 匹配目录的字段映射和合并规则。
@@ -195,9 +222,11 @@ Agent 内部结构化输出和终端调试输出必须按以下顺序保留字�
 ## 当前数据状态
 
 - SKU 目录：`data/sku_catalog/processed/2026-05-26/sku_support_catalog-2026-05-26.csv`
-- 历史话题 RAG 索引：`data/history_rag/index/latest`，因包含 raw topic 派生产物而被 git 忽略。
+- 正式 KB/MRD/手册源目录：`data/formal_kb/source/`，V1 支持 Markdown/TXT/JSONL 导出。
+- 正式 KB/MRD/手册索引：`data/formal_kb/index/latest`，部署时由 `scripts/build_formal_kb_index.py` 生成。
+- 历史 FAQ RAG 索引：`data/history_rag/index/latest`，因包含已审核群聊历史 FAQ 派生产物而被 git 忽略。
 - 媒体观察证据索引：`data/media_rag/index/latest`，因包含 raw media 派生产物而被 git 忽略。
 - 飞书 Base 归档：https://ulanzichina.feishu.cn/base/JDWwbG7rRaeoZksPe1TchVyWnif
 - 云盘图片归档：https://ulanzichina.feishu.cn/drive/folder/HRdOft9QHlXeCSdAh9hcSMXlnsc
 
-飞书 Base、图片归档和 raw topic JSON 是未来已审核案例卡片/RAG 流程的原始材料。终端 Agent 可以引用未审核历史话题和未审核媒体观察作为内部参考，但必须标注“需人工确认”，且不能把它直接当作正式答案依据。
+飞书 Base、图片归档和 raw topic JSON 是长期案例卡片/RAG 流程的原始材料。当前进入历史 FAQ 索引的群聊问答默认已审核，可作为可靠售后参考；媒体观察证据仍需人工打开原话题或正式资料复核，仅命中媒体观察时最终动作上限为 `human_review`，不能单独作为正式技术结论、政策依据或客户承诺依据。

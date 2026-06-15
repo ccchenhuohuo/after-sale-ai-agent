@@ -65,7 +65,7 @@ def _asset_from_message_type(event: FeishuMessageEvent, content: dict[str, Any])
     if not key and event.message_type not in {"image", "video", "file", "audio"}:
         return None
     return SupportAsset(
-        asset_id=f"{event.message_id}:{event.message_type}:{key or 'asset'}",
+        asset_id=_safe_asset_id(event.message_id, event.message_type, key or "asset"),
         media_type=media_type,
         source="feishu",
         filename=str(content.get("file_name") or content.get("name") or ""),
@@ -95,7 +95,11 @@ def _assets_from_rich_content(event: FeishuMessageEvent, content: dict[str, Any]
             media_type = "video" if tag == "video" else "file" if tag == "file" else "image"
             assets.append(
                 SupportAsset(
-                    asset_id=f"{event.message_id}:rich:{block_index}:{item_index}:{key or tag}",
+                    asset_id=_safe_asset_id(
+                        event.message_id,
+                        f"rich:{block_index}:{item_index}:{tag}",
+                        key or tag,
+                    ),
                     media_type=media_type,
                     source="feishu",
                     filename=str(item.get("file_name") or item.get("name") or ""),
@@ -144,3 +148,10 @@ def _first_present(payload: dict[str, Any], keys: tuple[str, ...]) -> str:
         if value:
             return str(value)
     return ""
+
+
+def _safe_asset_id(message_id: str, kind: str, key: str) -> str:
+    message_ref = short_hash(message_id)
+    key_ref = short_hash(key)
+    clean_kind = re.sub(r"[^a-zA-Z0-9_.:-]+", "_", kind).strip("_") or "asset"
+    return f"feishu_asset:{message_ref}:{clean_kind}:{key_ref}"

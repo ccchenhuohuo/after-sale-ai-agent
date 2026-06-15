@@ -21,6 +21,7 @@ DEFAULT_DIMENSION = 1024
 REMOTE_TEXT_MAX_CHARS = 1200
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".ico", ".dib", ".icns", ".sgi"}
 SKU_RE = re.compile(r"\b[A-Z]{1,4}\d{2,5}[A-Z0-9-]*\b")
+VECTOR_ID_RE = re.compile(r"^vec_[A-Za-z0-9_-]{1,96}$")
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class MediaSearchResult:
     similarity_score: float
     rerank_score: float
     matched_reasons: list[str]
+    score_source: str = "text"
 
 
 def _path(value: str) -> Path:
@@ -90,6 +92,36 @@ def _load_embeddings(path: Path) -> np.ndarray | None:
     if not path.exists():
         return None
     return np.load(path)
+
+
+def _load_query_vector_refs(settings: Settings, vector_refs: list[str] | None, expected_dimension: int) -> list[tuple[str, np.ndarray]]:
+    if not vector_refs:
+        return []
+    directory = _path(settings.support_vector_artifact_dir)
+    vectors: list[tuple[str, np.ndarray]] = []
+    for vector_ref in dict.fromkeys(vector_refs):
+        if not VECTOR_ID_RE.fullmatch(str(vector_ref or "")):
+            continue
+        path = directory / f"{vector_ref}.npy"
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            array = np.load(path)
+        except Exception:
+            continue
+        if array.ndim == 2 and array.shape[0] >= 1:
+            vector = np.asarray(array[0], dtype=np.float32)
+        elif array.ndim == 1:
+            vector = np.asarray(array, dtype=np.float32)
+        else:
+            continue
+        if vector.shape[0] != expected_dimension:
+            continue
+        norm = np.linalg.norm(vector)
+        if norm:
+            vector = vector / norm
+        vectors.append((vector_ref, vector))
+    return vectors
 
 
 def _load_manifest(index_dir: Path) -> dict[str, Any]:
@@ -280,7 +312,7 @@ def _filter_chunks(chunks: Iterable[dict[str, Any]], product_model: str | None) 
     return matched, "product_filter_matched"
 
 
-def _matched_reasons(query: str, chunk: dict[str, Any], product_model: str | None) -> list[str]:
+def _matched_reasons(query: str, chunk: dict[str, Any], product_model: str | None, score_source: str = "text") -> list[str]:
     text = f"{chunk.get('text', '')} {chunk.get('sku', '')} {chunk.get('media_type', '')} {' '.join(chunk.get('media_types', []))}".upper()
     reasons: list[str] = []
     if product_model and product_model.upper() in text:
@@ -291,6 +323,8 @@ def _matched_reasons(query: str, chunk: dict[str, Any], product_model: str | Non
     media_type = chunk.get("media_type") or "、".join(chunk.get("media_types", []))
     if media_type:
         reasons.append(f"媒体类型：{media_type}")
+    if score_source != "text":
+        reasons.append("视觉向量引用命中")
     return reasons or ["媒体上下文相似候选"]
 
 
@@ -311,6 +345,7 @@ def _format_result(result: MediaSearchResult) -> str:
             f"  消息链接：{chunk.get('message_link', '')}",
             f"  相似度：{result.similarity_score:.4f}",
             f"  重排分：{result.rerank_score:.4f}",
+            f"  检索通道：{'视觉向量' if result.score_source != 'text' else '文本语义'}",
             "  审核状态：未审核媒体观察证据，需人工确认，不能作为正式依据。",
         ]
     )
@@ -321,6 +356,7 @@ def search_media_rag(
     *,
     product_model: str | None = None,
     settings: Settings | None = None,
+    vector_refs: list[str] | None = None,
 ) -> str:
     settings = settings or get_settings()
     index_dir = _path(settings.media_rag_index_path)
@@ -349,17 +385,25 @@ def search_media_rag(
             "embedding_model": settings.media_rag_embedding_model,
         },
     ):
+        embeddings = _load_embeddings(index_dir / "media_embeddings.npy")
+        expected_dimension = (
+            int(embeddings.shape[1])
+            if embeddings is not None and embeddings.ndim == 2 and embeddings.shape[0] == len(chunks)
+            else settings.media_rag_embedding_dimension
+        )
         query_vector = _query_embedding(settings, query)
         if query_vector is None and settings.media_rag_require_vl_models:
             return (
                 "未查询到可信媒体观察证据：媒体证据 qwen3-vl-embedding 服务不可用，"
                 "且配置禁止本机 fallback。"
             )
-        if query_vector is None:
-            query_vector = np.vstack([_hashed_embedding(query, settings.media_rag_embedding_dimension)])
-        embeddings = _load_embeddings(index_dir / "media_embeddings.npy")
-        if embeddings is None or embeddings.shape[0] != len(chunks) or embeddings.shape[1] != query_vector.shape[1]:
-            embeddings = np.vstack([_hashed_embedding(chunk["text"], query_vector.shape[1]) for chunk in chunks])
+        if query_vector is None or query_vector.shape[1] != expected_dimension:
+            query_vector = np.vstack([_hashed_embedding(query, expected_dimension)])
+        if embeddings is None or embeddings.shape[0] != len(chunks) or embeddings.shape[1] != expected_dimension:
+            embeddings = np.vstack([_hashed_embedding(chunk["text"], expected_dimension) for chunk in chunks])
+
+        query_vectors: list[tuple[str, np.ndarray]] = [("text", query_vector[0])]
+        query_vectors.extend(_load_query_vector_refs(settings, vector_refs, expected_dimension))
 
         chunk_to_index = {chunk["chunk_id"]: index for index, chunk in enumerate(chunks)}
         candidates = []
@@ -367,10 +411,16 @@ def search_media_rag(
             index = chunk_to_index.get(chunk["chunk_id"])
             if index is None:
                 continue
-            score = float(np.dot(embeddings[index], query_vector[0]))
+            score_source = "text"
+            score = -math.inf
+            for source, vector in query_vectors:
+                candidate_score = float(np.dot(embeddings[index], vector))
+                if candidate_score > score:
+                    score = candidate_score
+                    score_source = source
             if not math.isfinite(score):
                 score = 0.0
-            candidates.append((score, chunk))
+            candidates.append((score, score_source, chunk))
         candidates.sort(key=lambda item: item[0], reverse=True)
         candidates = candidates[:top_k]
 
@@ -386,7 +436,7 @@ def search_media_rag(
             "rerank_model": settings.media_rag_rerank_model,
         },
     ):
-        candidate_chunks = [chunk for _, chunk in candidates]
+        candidate_chunks = [chunk for _, _, chunk in candidates]
         rerank_scores = (
             _bailian_vl_rerank(settings, query, candidate_chunks, index_dir=index_dir, manifest=manifest)
             if settings.media_rag_provider == "bailian_vl"
@@ -398,7 +448,7 @@ def search_media_rag(
                 "且配置禁止本机 fallback。"
             )
         results: list[MediaSearchResult] = []
-        for similarity_score, chunk in candidates:
+        for similarity_score, score_source, chunk in candidates:
             lexical_bonus = len(set(_tokenize(query)) & set(_tokenize(chunk.get("text", "")))) / 100
             rerank_score = rerank_scores.get(chunk["chunk_id"], similarity_score + lexical_bonus) if rerank_scores else similarity_score + lexical_bonus
             results.append(
@@ -406,7 +456,8 @@ def search_media_rag(
                     chunk=chunk,
                     similarity_score=similarity_score,
                     rerank_score=float(rerank_score),
-                    matched_reasons=_matched_reasons(query, chunk, product_model),
+                    matched_reasons=_matched_reasons(query, chunk, product_model, score_source),
+                    score_source=score_source,
                 )
             )
         results.sort(key=lambda result: result.rerank_score, reverse=True)

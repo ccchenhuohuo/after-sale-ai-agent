@@ -26,9 +26,9 @@ DEFAULT_BAILIAN_EMBEDDING_BASE_URL = "https://dashscope.aliyuncs.com/compatible-
 DEFAULT_BAILIAN_EMBEDDING_MODEL = "text-embedding-v4"
 
 BASE_METADATA = {
-    "source_type": "feishu_raw_topic",
-    "evidence_level": "unreviewed_history",
-    "is_reviewed": False,
+    "source_type": "reviewed_feishu_history_faq",
+    "evidence_level": "reviewed_case",
+    "is_reviewed": True,
     "can_be_formal_evidence": False,
 }
 
@@ -185,7 +185,7 @@ def build_chunks(case: dict[str, Any], topic: dict[str, Any]) -> list[dict[str, 
                     f"解决方案类型：{case['solution_type']}",
                     f"客户症状：{case['symptom_summary']}",
                     f"处理结论：{case['resolution_summary']}",
-                    "审核状态：未审核历史参考，不能作为正式依据。",
+                    "审核状态：已审核群聊历史 FAQ，可作为可靠售后参考；不是正式政策源。",
                 ],
             ),
         },
@@ -206,7 +206,7 @@ def build_chunks(case: dict[str, Any], topic: dict[str, Any]) -> list[dict[str, 
                 "chunk_type": "solution_evidence",
                 "text": chunk_text(
                     "处理结论相关消息",
-                    [*solution_lines, "审核状态：未审核历史参考，需人工确认后才能用于正式口径。"],
+                    [*solution_lines, "审核状态：已审核群聊历史 FAQ，可作为可靠售后参考；不是正式政策源。"],
                 ),
             }
         )
@@ -345,7 +345,7 @@ def build_index(
     np.save(output_dir / "embeddings.npy", embeddings)
 
     manifest = {
-        "index_type": "history_topic_rag_mvp",
+        "index_type": "reviewed_history_faq_rag_v1",
         "source_staging_dir": str(staging_dir),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "case_count": len(cases),
@@ -356,9 +356,9 @@ def build_index(
         "embedding_model": embedding_model if provider == "bailian" else None,
         "bailian_embedding_base_url": bailian_embedding_base_url if provider == "bailian" else None,
         "embedding_text_max_chars": embedding_text_max_chars if provider == "bailian" else None,
-        "source_type": "feishu_raw_topic",
-        "evidence_level": "unreviewed_history",
-        "is_reviewed": False,
+        "source_type": "reviewed_feishu_history_faq",
+        "evidence_level": "reviewed_case",
+        "is_reviewed": True,
         "can_be_formal_evidence": False,
         "model_plan": {
             "embedding": "Bailian API provider only",

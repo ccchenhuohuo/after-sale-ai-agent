@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from typing import Callable, TypeVar
 
 from agents import custom_span
@@ -16,7 +17,11 @@ from agent_runtime.copilot.evidence import (
     short_hash,
 )
 from agent_runtime.copilot.case_context import UnifiedCaseContext
+from agent_runtime.observability.tracing import elapsed_ms, tool_like_attrs
 from agent_runtime.settings import Settings, get_settings
+from agent_runtime.tools.formal_kb import formal_kb_index_available
+from agent_runtime.tools.history_rag import history_rag_index_available
+from agent_runtime.tools.media_rag import media_rag_index_available
 from agent_runtime.tools.rag import search_history_evidence, search_media_evidence, search_official_kb_evidence
 from agent_runtime.tools.sku_catalog import resolve_sku_evidence
 
@@ -28,6 +33,7 @@ SKU_RE = re.compile(r"\b[A-Z]{1,4}\d{2,5}[A-Z0-9-]*\b")
 async def collect_support_evidence(raw_issue: str | UnifiedCaseContext, settings: Settings | None = None) -> SupportEvidencePack:
     settings = settings or get_settings()
     normalized_issue = _normalize_issue(_issue_text(raw_issue))
+    vector_refs = _vector_refs(raw_issue)
     query_hash = short_hash(normalized_issue)
     with custom_span(
         "input_normalize",
@@ -39,8 +45,18 @@ async def collect_support_evidence(raw_issue: str | UnifiedCaseContext, settings
     ):
         issue_type = infer_issue_type(normalized_issue)
 
-    with custom_span("sku_resolve", {"raw_issue_hash": query_hash}):
-        sku_items = await _to_thread(resolve_sku_evidence, normalized_issue, 5, settings)
+    sku_items = await _span_to_thread(
+        "sku_resolve",
+        {"raw_issue_hash": query_hash},
+        resolve_sku_evidence,
+        normalized_issue,
+        5,
+        settings,
+        tool_name="sku_catalog",
+        query=normalized_issue,
+        provider="local_csv",
+        index_available=True,
+    )
     product_model = _best_product_model(sku_items)
 
     with custom_span(
@@ -66,6 +82,11 @@ async def collect_support_evidence(raw_issue: str | UnifiedCaseContext, settings
             product_model,
             None,
             issue_type,
+            settings,
+            tool_name="official_kb",
+            query=normalized_issue,
+            provider=settings.formal_kb_provider,
+            index_available=formal_kb_index_available(settings),
         )
         history_task = _span_to_thread(
             "history_search",
@@ -75,6 +96,10 @@ async def collect_support_evidence(raw_issue: str | UnifiedCaseContext, settings
             product_model,
             issue_type,
             settings,
+            tool_name="history_rag",
+            query=normalized_issue,
+            provider=settings.history_rag_provider,
+            index_available=history_rag_index_available(settings),
         )
         media_task = _span_to_thread(
             "media_search",
@@ -83,6 +108,11 @@ async def collect_support_evidence(raw_issue: str | UnifiedCaseContext, settings
             normalized_issue,
             product_model,
             settings,
+            vector_refs,
+            tool_name="media_rag",
+            query=normalized_issue,
+            provider=settings.media_rag_provider,
+            index_available=media_rag_index_available(settings),
         )
         official_result, history_result, media_result = await asyncio.gather(
             official_task,
@@ -128,6 +158,12 @@ def _issue_text(raw_issue: str | UnifiedCaseContext) -> str:
     return raw_issue
 
 
+def _vector_refs(raw_issue: str | UnifiedCaseContext) -> list[str]:
+    if isinstance(raw_issue, UnifiedCaseContext):
+        return list(raw_issue.vector_refs)
+    return []
+
+
 def _normalize_issue(raw_issue: str) -> str:
     return re.sub(r"\s+", " ", raw_issue or "").strip()
 
@@ -136,9 +172,81 @@ async def _to_thread(func: Callable[..., T], *args: object) -> T:
     return await asyncio.to_thread(func, *args)
 
 
-async def _span_to_thread(name: str, data: dict[str, object], func: Callable[..., T], *args: object) -> T:
-    with custom_span(name, data):
-        return await _to_thread(func, *args)
+async def _span_to_thread(
+    name: str,
+    data: dict[str, object],
+    func: Callable[..., T],
+    *args: object,
+    tool_name: str,
+    query: str,
+    provider: str,
+    index_available: bool,
+) -> T:
+    started_at = time.perf_counter()
+    span = custom_span(name, data)
+    with span:
+        try:
+            result = await _to_thread(func, *args)
+        except Exception as exc:
+            span.span_data.data.update(
+                tool_like_attrs(
+                    tool_name=tool_name,
+                    status="error",
+                    query_hash=short_hash(query),
+                    query_chars=len(query),
+                    latency_ms=elapsed_ms(started_at),
+                    index_available=index_available,
+                    provider=provider,
+                    extra={"error_type": type(exc).__name__},
+                )
+            )
+            raise
+        span.span_data.data.update(
+            tool_like_attrs(
+                tool_name=tool_name,
+                status=_retrieval_status(result),
+                query_hash=short_hash(query),
+                query_chars=len(query),
+                latency_ms=elapsed_ms(started_at),
+                result_count=_result_count(result),
+                top_score=_top_score(result),
+                index_available=index_available,
+                provider=provider,
+            )
+        )
+        return result
+
+
+def _retrieval_status(result: object) -> str:
+    if isinstance(result, list):
+        if not result:
+            return "empty"
+        statuses = {str(getattr(item, "status", "")) for item in result}
+        if "hit" in statuses:
+            return "hit"
+        if "error" in statuses:
+            return "error"
+        return "empty"
+    return "ok"
+
+
+def _result_count(result: object) -> int:
+    if isinstance(result, list):
+        return len([item for item in result if getattr(item, "status", "") == "hit"])
+    return 0
+
+
+def _top_score(result: object) -> float:
+    if not isinstance(result, list):
+        return 0.0
+    scores = []
+    for item in result:
+        score = getattr(item, "score", 0.0) or getattr(item, "rerank_score", 0.0) or 0.0
+        try:
+            scores.append(float(score))
+        except (TypeError, ValueError):
+            continue
+    return max(scores) if scores else 0.0
 
 
 def _best_product_model(items: list[SkuEvidence]) -> str:

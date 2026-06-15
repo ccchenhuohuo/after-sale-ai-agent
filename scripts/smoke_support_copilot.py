@@ -67,13 +67,17 @@ def run_smoke(*, live: bool = False) -> dict[str, Any]:
                 failed = failed or not record["ok"]
 
     duration_ms = round((time.perf_counter() - started) * 1000, 2)
-    return {
+    report = {
         "ok": not failed,
         "mode": "live" if live else "offline",
         "checks": checks,
         "scenarios": scenarios,
         "duration_ms": duration_ms,
     }
+    leak_record = _run_check("smoke_report_leak_check", lambda: _check_report_no_sensitive_artifacts(report))
+    checks.append(leak_record)
+    report["ok"] = report["ok"] and leak_record["ok"]
+    return report
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -131,6 +135,8 @@ def _run_async_scenario(request: SupportCaseRequest, settings: Settings) -> dict
         }
 
     context = result.case_result.context
+    visual_artifacts = [artifact for artifact in result.case_result.artifacts if artifact.artifact_type == "visual_summary"]
+    visual_ok = [artifact for artifact in visual_artifacts if artifact.status == "ok"]
     return {
         "name": request.request_id,
         "ok": True,
@@ -162,6 +168,9 @@ def _run_async_scenario(request: SupportCaseRequest, settings: Settings) -> dict
         ],
         "context": {
             "normalized_query": context.normalized_query,
+            "visual_summaries": context.visual_summaries,
+            "visual_summary_status": visual_artifacts[-1].status if visual_artifacts else "not_required",
+            "visual_summary_excerpt": visual_ok[-1].summary[:160] if visual_ok else "",
             "asset_refs": context.asset_refs,
             "vector_refs": context.vector_refs,
             "missing_information": context.missing_information,
@@ -192,6 +201,7 @@ def _build_smoke_settings(temp_dir: Path) -> Settings:
         support_intake_router_enabled=False,
         support_context_assembler_enabled=False,
         support_ocr_provider="disabled",
+        support_visual_understanding_provider="fake",
         support_video_ffmpeg_path=str(temp_dir / "missing-ffmpeg"),
         support_video_sample_dir=str(data_dir / "video_samples"),
         support_vector_artifact_dir=str(data_dir / "vectors"),
@@ -206,6 +216,12 @@ def _build_smoke_settings(temp_dir: Path) -> Settings:
         history_rag_require_remote_models=False,
         history_rag_top_k=3,
         history_rag_top_n=2,
+        formal_kb_source_dir=str(data_dir / "formal_source"),
+        formal_kb_index_path=str(data_dir / "formal_index"),
+        formal_kb_provider="local_hash",
+        formal_kb_require_remote_models=False,
+        formal_kb_top_k=3,
+        formal_kb_top_n=2,
         media_rag_index_path=str(data_dir / "media_index"),
         media_rag_provider="local_hash",
         media_rag_require_vl_models=False,
@@ -247,6 +263,26 @@ def _write_fixture_data(temp_dir: Path) -> None:
     ]
     _write_jsonl(history_dir / "history_chunks.jsonl", history_chunks)
     np.save(history_dir / "embeddings.npy", np.zeros((len(history_chunks), 768), dtype=np.float32))
+
+    formal_dir = data_dir / "formal_index"
+    formal_dir.mkdir()
+    formal_chunks = [
+        {
+            "chunk_id": "formal_l023_1",
+            "source_id": "kb-l023-power",
+            "source_type": "official_kb",
+            "evidence_level": "formal",
+            "verified": True,
+            "title": "L023 不亮排查 SOP",
+            "section": "基础供电排查",
+            "product_model": "L023",
+            "sku": "L023",
+            "source_url": "https://kb.example.test/l023-power",
+            "text": "L023 不亮时，先确认充电线、插头、接口、按键和指示灯状态，再根据照片或视频判断是否需要人工复核。",
+        }
+    ]
+    _write_jsonl(formal_dir / "formal_chunks.jsonl", formal_chunks)
+    np.save(formal_dir / "embeddings.npy", np.zeros((len(formal_chunks), 768), dtype=np.float32))
 
     media_dir = data_dir / "media_index"
     media_dir.mkdir()
@@ -293,7 +329,7 @@ def _smoke_requests(temp_dir: Path) -> list[SupportCaseRequest]:
             message_id="om_smoke_image",
             assets=[
                 SupportAsset(
-                    asset_id="om_smoke_image:image:img_smoke_damage",
+                    asset_id="openclaw_asset:smoke:image:damage",
                     media_type="image",
                     source="openclaw_feishu",
                     filename="damage.jpg",
@@ -314,7 +350,7 @@ def _smoke_requests(temp_dir: Path) -> list[SupportCaseRequest]:
             source_platform="feishu",
             assets=[
                 SupportAsset(
-                    asset_id="img_damage_local",
+                    asset_id="openclaw_asset:smoke:image:damage_local",
                     media_type="image",
                     source="openclaw_feishu",
                     filename="damage.jpg",
@@ -332,7 +368,7 @@ def _smoke_requests(temp_dir: Path) -> list[SupportCaseRequest]:
             user_text="L023 外壳有裂痕，客户问怎么处理。",
             assets=[
                 SupportAsset(
-                    asset_id="img_mixed_damage",
+                    asset_id="openclaw_asset:smoke:image:mixed_damage",
                     media_type="image",
                     source="openclaw_feishu",
                     filename="damage.jpg",
@@ -350,7 +386,7 @@ def _smoke_requests(temp_dir: Path) -> list[SupportCaseRequest]:
             user_text="客户发了一个 L023 不亮的视频。",
             assets=[
                 SupportAsset(
-                    asset_id="video_remote",
+                    asset_id="openclaw_asset:smoke:video:remote",
                     media_type="video",
                     source="openclaw_feishu",
                     filename="fault.mp4",
@@ -368,7 +404,7 @@ def _smoke_requests(temp_dir: Path) -> list[SupportCaseRequest]:
             user_text="客户补了一张图片。",
             assets=[
                 SupportAsset(
-                    asset_id="img_rejected",
+                    asset_id="openclaw_asset:smoke:image:rejected",
                     media_type="image",
                     source="openclaw_feishu",
                     filename="secret.jpg",
@@ -414,7 +450,11 @@ def _check_openclaw_http_contract() -> dict[str, Any]:
     import agent_runtime.channels.openclaw_feishu.webhook as openclaw_webhook
 
     original_get_settings = openclaw_webhook.get_settings
-    openclaw_webhook.get_settings = lambda: Settings(openclaw_feishu_bridge_secret="", llm_api_key="")
+    openclaw_webhook.get_settings = lambda: Settings(
+        openclaw_feishu_bridge_secret="",
+        openclaw_feishu_require_secret=False,
+        llm_api_key="",
+    )
     try:
         with TestClient(app) as client:
             healthz = client.get("/healthz")
@@ -509,6 +549,24 @@ def _check_live_smoke_enabled() -> dict[str, Any]:
     return {"enabled": True}
 
 
+def _check_report_no_sensitive_artifacts(report: dict[str, Any]) -> dict[str, Any]:
+    raw = json.dumps(report, ensure_ascii=False)
+    forbidden = (
+        "file_key",
+        "local_path",
+        "frame_paths",
+        "/etc/passwd",
+        "assets.example.test",
+        "img_smoke_damage",
+        "img_key",
+        "video_key",
+        "[0.0",
+    )
+    leaked = [token for token in forbidden if token in raw]
+    assert not leaked, f"smoke report leaked internal attachment details: {leaked}"
+    return {"forbidden_tokens_checked": len(forbidden)}
+
+
 def _assert_runtime_result(request: SupportCaseRequest, result: Any, visible_text: str) -> None:
     assert result.request.request_id == request.request_id
     assert result.case_result.context.normalized_query.strip()
@@ -566,7 +624,7 @@ def _support_answer() -> SupportAnswer:
         troubleshooting_steps=["确认充电线、插头和接口是否正常", "确认是否长按开机键并观察指示灯", "补充产品铭牌或订单信息"],
         follow_up_questions=["请提供订单号或产品型号", "请补充清晰的产品状态照片"],
         official_evidence="未查询到可信正式依据，不可编造。",
-        history_reference="命中未审核历史参考，需人工确认后使用，不能作为正式依据。",
+        history_reference="命中已审核群聊历史 FAQ，可作为可靠售后参考；不是正式政策源。",
         data_sources_used=[],
         missing_data_sources=[],
         recommended_action="answer",

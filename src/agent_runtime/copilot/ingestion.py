@@ -16,6 +16,7 @@ from agent_runtime.copilot.case_context import (
     SupportCaseRequest,
 )
 from agent_runtime.copilot.evidence import short_hash
+from agent_runtime.copilot.ocr import extract_ocr_text
 from agent_runtime.settings import Settings
 from agent_runtime.tools.media_rag import _bailian_vl_embedding
 
@@ -122,14 +123,67 @@ def _ingest_ocr(asset: SupportAsset, decision: AssetRouteDecision, settings: Set
             model_name=settings.support_ocr_provider,
             metadata={"asset_role": decision.asset_role},
         )
+    ocr_input = asset.url or asset.local_path
+    if not ocr_input:
+        return IngestionArtifact(
+            artifact_id=f"ocr:{asset.asset_id}:missing-input",
+            artifact_type="ocr",
+            status="unsupported",
+            asset_id=asset.asset_id,
+            summary="附件缺少可用于 OCR 的 URL 或本地文件。",
+            model_name=settings.support_ocr_model,
+            metadata={"asset_role": decision.asset_role},
+        )
+    with custom_span(
+        "ingestion_ocr",
+        {
+            "provider": settings.support_ocr_provider,
+            "model": settings.support_ocr_model,
+            "asset_role": decision.asset_role,
+        },
+    ):
+        result = extract_ocr_text(ocr_input, settings)
+    if result.status == "ok":
+        return IngestionArtifact(
+            artifact_id=f"ocr:{asset.asset_id}:{short_hash(result.text)}",
+            artifact_type="ocr",
+            status="ok",
+            asset_id=asset.asset_id,
+            text=result.text,
+            summary="已完成图片 OCR 识别。",
+            source_text_hash=short_hash(result.text),
+            model_name=result.model_name,
+            metadata={"asset_role": decision.asset_role, "source_kind": result.source_kind},
+        )
+    if result.status == "empty":
+        return IngestionArtifact(
+            artifact_id=f"ocr:{asset.asset_id}:empty",
+            artifact_type="ocr",
+            status="empty",
+            asset_id=asset.asset_id,
+            summary="OCR 未识别到可读文字。",
+            model_name=result.model_name,
+            metadata={"asset_role": decision.asset_role, "source_kind": result.source_kind},
+        )
+    if result.status == "error":
+        return IngestionArtifact(
+            artifact_id=f"ocr:{asset.asset_id}:error",
+            artifact_type="ocr",
+            status="error",
+            asset_id=asset.asset_id,
+            summary="OCR provider 调用失败，图片文字暂未识别。",
+            model_name=result.model_name,
+            error=result.error,
+            metadata={"asset_role": decision.asset_role, "source_kind": result.source_kind},
+        )
     return IngestionArtifact(
         artifact_id=f"ocr:{asset.asset_id}:unavailable",
         artifact_type="ocr",
         status="unsupported",
         asset_id=asset.asset_id,
-        summary="当前 OCR provider 尚未接入可用实现，图片文字暂未识别。",
-        model_name=settings.support_ocr_provider,
-        metadata={"asset_role": decision.asset_role},
+        summary=result.error or "当前 OCR provider 尚未接入可用实现，图片文字暂未识别。",
+        model_name=result.model_name or settings.support_ocr_provider,
+        metadata={"asset_role": decision.asset_role, "source_kind": result.source_kind},
     )
 
 

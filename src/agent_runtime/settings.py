@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     support_context_assembler_enabled: bool = False
     support_context_assembler_model: str = ""
     support_ocr_provider: str = "disabled"
+    support_ocr_model: str = "qwen-vl-plus"
+    support_ocr_base_url: str = ""
+    support_ocr_timeout_seconds: float = 60.0
+    support_ocr_image_max_bytes: int = 7_000_000
     support_vector_index_namespace: str = "after_sales_v1"
     support_vector_artifact_dir: str = "data/feishu_runtime/vector_artifacts"
     openclaw_sidecar_version: str = "2026.6.6"

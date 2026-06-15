@@ -1,5 +1,8 @@
 import asyncio
 
+import httpx
+
+import agent_runtime.copilot.ocr as ocr
 from agent_runtime.copilot.case_context import SupportAsset, SupportCaseRequest
 from agent_runtime.copilot.context_assembly import build_data_source_coverage
 from agent_runtime.copilot.evidence import HistoryEvidence, MediaEvidence, OfficialKbEvidence, SkuEvidence, SupportEvidencePack
@@ -45,6 +48,96 @@ def test_chat_screenshot_routes_to_ocr_without_business_answer():
     assert decision.requires_visual_embedding is False
     assert "客户聊天记录" in result.context.normalized_query
     assert result.context.vector_refs == []
+
+
+def test_bailian_vl_ocr_reads_local_image_into_context(monkeypatch, tmp_path):
+    image_path = tmp_path / "chat_screenshot.png"
+    image_path.write_bytes(b"fake-image-bytes")
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "客户：L023 指示灯不亮\n客服：请确认是否充电"
+                        }
+                    }
+                ]
+            }
+
+    def fake_post(url, json, headers, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(ocr.httpx, "post", fake_post)
+    request = SupportCaseRequest(
+        request_id="case_chat_image",
+        source="feishu",
+        assets=[
+            SupportAsset(
+                asset_id="img_chat",
+                media_type="image",
+                filename="chat_screenshot.png",
+                local_path=str(image_path),
+            )
+        ],
+    )
+    settings = Settings(
+        support_ocr_provider="bailian_vl",
+        support_ocr_model="qwen-vl-plus",
+        support_ocr_base_url="https://dashscope.test/compatible-mode/v1",
+        bailian_api_key="test-key",
+    )
+
+    result = asyncio.run(build_support_case_context(request, settings))
+
+    assert "客户：L023 指示灯不亮" in result.context.normalized_query
+    assert "图片文字内容暂未完成 OCR 识别。" not in result.context.missing_information
+    assert any(artifact.artifact_type == "ocr" and artifact.status == "ok" for artifact in result.artifacts)
+    assert captured["url"] == "https://dashscope.test/compatible-mode/v1/chat/completions"
+    assert captured["json"]["model"] == "qwen-vl-plus"
+    assert captured["json"]["messages"][0]["content"][0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert captured["headers"]["Authorization"] == "Bearer test-key"
+    assert captured["timeout"] == 60.0
+
+
+def test_ocr_provider_failure_records_error_artifact_without_crashing(monkeypatch, tmp_path):
+    image_path = tmp_path / "chat_screenshot.png"
+    image_path.write_bytes(b"fake-image-bytes")
+
+    def fake_post(url, json, headers, timeout):
+        raise httpx.ConnectError("network down")
+
+    monkeypatch.setattr(ocr.httpx, "post", fake_post)
+    request = SupportCaseRequest(
+        request_id="case_chat_image",
+        source="feishu",
+        assets=[
+            SupportAsset(
+                asset_id="img_chat",
+                media_type="image",
+                filename="chat_screenshot.png",
+                local_path=str(image_path),
+            )
+        ],
+    )
+    settings = Settings(support_ocr_provider="bailian_vl", bailian_api_key="test-key")
+
+    result = asyncio.run(build_support_case_context(request, settings))
+
+    assert any(
+        artifact.artifact_type == "ocr" and artifact.status == "error" and "network down" in artifact.error
+        for artifact in result.artifacts
+    )
+    assert "图片文字内容暂未完成 OCR 识别。" in result.context.missing_information
 
 
 def test_product_damage_image_routes_to_visual_embedding_ref_without_raw_vector():

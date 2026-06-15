@@ -12,6 +12,7 @@ from agent_runtime.copilot.case_context import (
     SupportAsset,
     SupportCaseRequest,
 )
+from agent_runtime.copilot.llm_payloads import safe_asset_payload_for_llm
 from agent_runtime.llm import build_run_config
 from agent_runtime.settings import Settings
 
@@ -66,16 +67,7 @@ async def _route_with_agent(request: SupportCaseRequest, settings: Settings) -> 
     agent = build_case_intake_router_agent(model_name)
     payload = {
         "user_text": request.user_text,
-        "assets": [
-            {
-                "asset_id": asset.asset_id,
-                "media_type": asset.media_type,
-                "filename": asset.filename,
-                "mime_type": asset.mime_type,
-                "metadata": asset.metadata,
-            }
-            for asset in request.assets
-        ],
+        "assets": [safe_asset_payload_for_llm(asset) for asset in request.assets],
     }
     with custom_span(
         "intake_router_agent",

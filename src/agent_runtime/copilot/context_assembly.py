@@ -15,6 +15,7 @@ from agent_runtime.copilot.case_context import (
     UnifiedCaseContext,
 )
 from agent_runtime.copilot.evidence import SupportEvidencePack
+from agent_runtime.copilot.llm_payloads import safe_artifact_payload_for_llm, safe_request_payload_for_llm
 from agent_runtime.llm import build_run_config
 from agent_runtime.settings import Settings
 
@@ -62,9 +63,9 @@ async def _assemble_with_agent(
     model_name = settings.support_context_assembler_model or settings.support_agent_model
     agent = build_context_assembler_agent(model_name)
     payload = {
-        "request": request.model_dump(),
+        "request": safe_request_payload_for_llm(request),
         "route": route.model_dump(),
-        "artifacts": [_safe_artifact_payload(artifact) for artifact in artifacts],
+        "artifacts": [safe_artifact_payload_for_llm(artifact) for artifact in artifacts],
     }
     with custom_span(
         "context_assembler_agent",
@@ -252,12 +253,6 @@ def _owner_candidate(evidence_pack: SupportEvidencePack) -> str:
         if item.product_owner_name:
             return item.product_owner_name
     return ""
-
-
-def _safe_artifact_payload(artifact: IngestionArtifact) -> dict[str, object]:
-    payload = artifact.model_dump()
-    payload.pop("metadata", None)
-    return payload
 
 
 def _normalize_query(parts: list[str]) -> str:

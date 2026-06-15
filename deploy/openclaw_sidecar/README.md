@@ -10,7 +10,17 @@ Pinned versions:
 
 Runtime requirement:
 
-- Node.js `>=22.19.0`
+- Node.js `22.22.2` is the recommended runtime for this lockfile.
+- npm `11.17.0` via Corepack.
+
+Local setup used for this lockfile:
+
+```bash
+nvm install 22.22.2
+nvm use 22.22.2
+corepack prepare npm@11.17.0 --activate
+corepack npm install --package-lock-only --ignore-scripts
+```
 
 The current dependency audit reports high-severity issues through
 `@larksuite/openclaw-lark -> @larksuiteoapi/node-sdk -> axios`, with no npm

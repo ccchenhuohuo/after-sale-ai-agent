@@ -60,6 +60,7 @@ def test_run_config_uses_current_project_trace_app_name():
     assert config.trace_metadata["app"] == "ulanzi-after-sell-copilot"
     assert config.trace_metadata["llm_model"] == "deepseek-v4-flash"
     assert config.trace_metadata["source"] == "test"
+    assert config.trace_include_sensitive_data is True
 
 
 def test_configure_agents_runtime_disables_openai_hosted_trace_processors_by_default(monkeypatch):

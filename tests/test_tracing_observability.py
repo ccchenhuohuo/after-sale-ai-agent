@@ -209,6 +209,7 @@ def test_accepted_feishu_runtime_trace_contains_reply_render_and_reply_spans(mon
             contract_issues=[],
             answer=_support_answer(),
             coverage=SimpleNamespace(recommended_action="answer", mention_enabled=False),
+            trace_include_full_io=settings.support_agent_trace_include_sensitive_data,
         )
         return feishu_reply.render_feishu_visible_runtime_reply(result).safe_text
 
@@ -238,11 +239,15 @@ def test_accepted_feishu_runtime_trace_contains_reply_render_and_reply_spans(mon
     assert "session_id" not in runtime_traces[0]
     assert "chat_id" not in runtime_traces[0]
     assert "message_id" not in runtime_traces[0]
-    assert "input.value" not in runtime_traces[0]
+    assert runtime_traces[0]["input.value"] == "@飞书 CLI L023 不亮"
+    assert runtime_traces[0]["user.input"] == "@飞书 CLI L023 不亮"
     span_names = [name for name, _ in spans]
     assert "visible_reply_render" in span_names
     assert "channel_reply" in span_names
     assert "channel_reply_result" in span_names
+    visible_reply_span = dict(spans)["visible_reply_render"]
+    assert visible_reply_span["output.value"]
+    assert visible_reply_span["visible_reply"] == visible_reply_span["output.value"]
     assert flushes == ["flush"]
 
 
@@ -262,6 +267,7 @@ def test_openclaw_support_case_uses_one_runtime_trace_for_runtime_and_reply(monk
             answer=_support_answer(),
             request=request,
             coverage=SimpleNamespace(recommended_action="answer", mention_enabled=False),
+            trace_include_full_io=True,
         )
 
     monkeypatch.setattr(
@@ -307,10 +313,12 @@ def test_openclaw_support_case_uses_one_runtime_trace_for_runtime_and_reply(monk
     assert "chat_id" not in runtime_traces[0]
     assert "thread_id" not in runtime_traces[0]
     assert "message_id" not in runtime_traces[0]
-    assert "input.value" not in runtime_traces[0]
+    assert runtime_traces[0]["input.value"] == "客户反馈 L023 不亮"
+    assert runtime_traces[0]["user.input"] == "客户反馈 L023 不亮"
     assert {name for name, _ in spans} >= {"visible_reply_render", "channel_reply", "channel_reply_result"}
     visible_reply_span = dict(spans)["visible_reply_render"]
-    assert "output.value" not in visible_reply_span
+    assert visible_reply_span["output.value"]
+    assert visible_reply_span["visible_reply"] == visible_reply_span["output.value"]
     assert visible_reply_span["output_chars"] > 0
     reply_result_span = dict(spans)["channel_reply_result"]
     assert reply_result_span["reply_status"] == "payload_built"

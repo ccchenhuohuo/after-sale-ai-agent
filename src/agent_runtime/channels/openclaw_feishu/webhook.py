@@ -55,7 +55,7 @@ async def openclaw_feishu_support_case(
             settings,
             entrypoint="openclaw_feishu",
             group_id=group_id,
-            attrs=_runtime_trace_attrs(request, group_id=group_id),
+            attrs=_runtime_trace_attrs(request, settings=settings, group_id=group_id),
         ):
             result = await run_support_case_request(
                 request,
@@ -118,7 +118,14 @@ def _request_from_payload(payload: dict[str, Any]) -> SupportCaseRequest:
     return build_support_case_request_from_openclaw(payload)
 
 
-def _runtime_trace_attrs(request: SupportCaseRequest, *, group_id: str) -> dict[str, object]:
+def _runtime_trace_attrs(request: SupportCaseRequest, *, settings: Settings, group_id: str) -> dict[str, object]:
+    full_io_attrs = {}
+    if settings.support_agent_trace_include_sensitive_data:
+        input_value = request.user_text or _asset_input_for_trace(request)
+        full_io_attrs = {
+            "input.value": input_value,
+            "user.input": request.user_text or "",
+        }
     return base_trace_attrs(
         trace_kind="runtime",
         entrypoint="openclaw_feishu",
@@ -135,8 +142,28 @@ def _runtime_trace_attrs(request: SupportCaseRequest, *, group_id: str) -> dict[
             "loop_version": "v2",
             "asset_count": len(request.assets),
             "input_chars": len(request.user_text or ""),
+            **full_io_attrs,
         },
     )
+
+
+def _asset_input_for_trace(request: SupportCaseRequest) -> str:
+    if not request.assets:
+        return ""
+    assets = []
+    for asset in request.assets:
+        item: dict[str, object] = {
+            "asset_id": asset.asset_id,
+            "media_type": asset.media_type,
+        }
+        if asset.filename:
+            item["filename"] = asset.filename
+        if asset.mime_type:
+            item["mime_type"] = asset.mime_type
+        if asset.metadata:
+            item["metadata"] = asset.metadata
+        assets.append(item)
+    return f"附件：{assets}"
 
 
 def _verify_openclaw_secret(

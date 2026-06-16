@@ -44,6 +44,12 @@ def render_feishu_visible_runtime_reply(result: SupportRuntimeResult) -> FeishuV
             reply = FeishuVisibleReply(text=text, issues=validate_feishu_visible_reply(text))
             fallback_reason = "visible_reply_validation_blocked" if reply.blocked else ""
         if trace_span is not None:
+            full_io_attrs = {}
+            if getattr(result, "trace_include_full_io", False):
+                full_io_attrs = {
+                    "visible_reply": reply.safe_text,
+                    "output.value": reply.safe_text,
+                }
             trace_span.span_data.data.update(
                 {
                     "recommended_action": getattr(coverage, "recommended_action", ""),
@@ -54,6 +60,7 @@ def render_feishu_visible_runtime_reply(result: SupportRuntimeResult) -> FeishuV
                     "issue_codes": [issue.code for issue in reply.issues],
                     "reply_chars": len(reply.safe_text),
                     "output_chars": len(reply.safe_text),
+                    **full_io_attrs,
                 }
             )
         return reply

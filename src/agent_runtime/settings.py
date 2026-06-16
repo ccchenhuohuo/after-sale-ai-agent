@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     openai_project_id: str = ""
     support_agent_openai_hosted_tracing_enabled: bool = False
     support_agent_tracing_disabled: bool = True
-    support_agent_trace_include_sensitive_data: bool = False
+    support_agent_trace_include_sensitive_data: bool = True
     support_agent_trace_workflow_name: str = "ulanzi after-sell copilot MVP"
     support_trace_admission_mode: str = "sample"
     support_trace_duplicate_events: bool = False

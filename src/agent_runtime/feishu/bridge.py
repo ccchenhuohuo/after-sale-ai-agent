@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import time
 
@@ -178,7 +179,7 @@ async def process_message_event(
             entrypoint="feishu",
             group_id=group_id,
             attrs={
-                **_root_trace_attrs(event, trace_kind="runtime", event_status="processing"),
+                **_root_trace_attrs(event, settings=settings, trace_kind="runtime", event_status="processing"),
                 **trace_data,
                 "source": "feishu-bridge",
                 "loop_version": "v2",
@@ -216,8 +217,21 @@ async def process_message_event(
         flush_traces()
 
 
-def _root_trace_attrs(event: FeishuMessageEvent, *, trace_kind: str, event_status: str) -> dict[str, object]:
+def _root_trace_attrs(
+    event: FeishuMessageEvent,
+    *,
+    settings: Settings,
+    trace_kind: str,
+    event_status: str,
+) -> dict[str, object]:
     thread_id = effective_thread_id(event)
+    full_io_attrs = {}
+    if settings.support_agent_trace_include_sensitive_data:
+        input_value = _event_input_for_trace(event)
+        full_io_attrs = {
+            "input.value": input_value,
+            "user.input": event.content or "",
+        }
     return base_trace_attrs(
         trace_kind=trace_kind,
         entrypoint="feishu",
@@ -230,8 +244,17 @@ def _root_trace_attrs(event: FeishuMessageEvent, *, trace_kind: str, event_statu
         extra={
             "trace_group_id": _trace_group_id(event),
             "input_chars": len(event.content or ""),
+            **full_io_attrs,
         },
     )
+
+
+def _event_input_for_trace(event: FeishuMessageEvent) -> str:
+    if event.content:
+        return event.content
+    if event.raw_content is not None:
+        return json.dumps(event.raw_content, ensure_ascii=False, default=str)
+    return f"[{event.message_type or 'unknown'} message without extracted text]"
 
 
 def _maybe_trace_admission(
@@ -247,7 +270,7 @@ def _maybe_trace_admission(
     with admission_trace(
         settings,
         {
-            **_root_trace_attrs(event, trace_kind="admission", event_status=status),
+            **_root_trace_attrs(event, settings=settings, trace_kind="admission", event_status=status),
             **trace_data,
             "source": "feishu-bridge",
             "loop_version": "v2",

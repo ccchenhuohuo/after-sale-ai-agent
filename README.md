@@ -131,7 +131,7 @@ SUPPORT_OCR_PROVIDER=disabled
 SUPPORT_VISUAL_UNDERSTANDING_PROVIDER=bailian_vl
 SUPPORT_VISUAL_UNDERSTANDING_MODEL=qwen-vl-plus
 SUPPORT_AGENT_OPENAI_HOSTED_TRACING_ENABLED=false
-SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=false
+SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=true
 SUPPORT_VECTOR_INDEX_NAMESPACE=after_sales_v1
 SUPPORT_ASSET_ALLOWED_LOCAL_DIRS=
 SUPPORT_ASSET_ALLOWED_URL_HOSTS=
@@ -146,7 +146,7 @@ FORMAL_KB_REQUIRE_REMOTE_MODELS=false
 
 `LLM_API_KEY` 只用于实际模型调用，例如 DeepSeek 的 OpenAI-compatible endpoint。生产默认不启用 OpenAI hosted tracing，只保留 Phoenix/本地运行链路；确需导出到 OpenAI Platform 时，设置 `SUPPORT_AGENT_OPENAI_HOSTED_TRACING_ENABLED=true` 并单独配置 `OPENAI_TRACING_API_KEY`。
 
-生产 tracing 默认只记录 hash、长度、状态和延迟，不写用户原文、原始飞书/OpenClaw ID、file key、local path、URL 或 raw vector。确需复盘明文时，只在受控本地/临时测试环境打开 `SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=true`。
+当前调试阶段 tracing 默认记录完整业务 I/O，便于在 Phoenix / OpenAI Traces 的 Sessions 页复盘用户原始输入、Agent prompt、内部答案和最终飞书可见回复。需要切回最小化 trace 时，将 `SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=false`；raw vector 仍不写入 trace。
 
 飞书桥接至少需要以下配置：
 

@@ -45,6 +45,7 @@ class SupportRuntimeResult(BaseModel):
     answer: SupportAnswer
     internal_text: str
     contract_issues: list[ContractIssue] = Field(default_factory=list)
+    trace_include_full_io: bool = False
 
     @property
     def blocked(self) -> bool:
@@ -74,12 +75,13 @@ async def run_support_case_request(
     raw_group_id = request.trace_group_id or request.session_id or request.request_id
     group_id = run_config_group_id or f"{entrypoint}:{hash_trace_id(raw_group_id)}"
     trace_session_id = request.session_id or request.trace_group_id or request.request_id
-    runtime_sensitive_attrs = _sensitive_trace_attrs(
+    runtime_full_io_attrs = _full_io_trace_attrs(
         settings,
         **{
             "session.id": trace_session_id,
-            "input.value": raw_issue,
+            "input.value": _request_input_for_trace(request),
             "user.input": raw_issue,
+            "request.assets": _asset_summary_for_trace(request),
             "chat_id": request.chat_id,
             "thread_id": request.thread_id,
             "message_id": request.message_id,
@@ -97,10 +99,10 @@ async def run_support_case_request(
             "session.id": hash_trace_id(trace_session_id),
             "raw_issue_hash": short_hash(raw_issue),
             "asset_count": len(request.assets),
-            **runtime_sensitive_attrs,
+            **runtime_full_io_attrs,
         },
     ):
-        _set_current_otel_attrs(runtime_sensitive_attrs)
+        _set_current_otel_attrs(runtime_full_io_attrs)
         intake_started_at = time.perf_counter()
         with custom_span(
             "intake_pipeline",
@@ -121,9 +123,10 @@ async def run_support_case_request(
                 "asset_ref_count": len(case_result.context.asset_refs),
                 "vector_ref_count": len(case_result.context.vector_refs),
                 "missing_information_count": len(case_result.context.missing_information),
-                **_sensitive_trace_attrs(
+                **_full_io_trace_attrs(
                     settings,
                     **{
+                        "input.value": case_result.context.normalized_query,
                         "context.normalized_query": case_result.context.normalized_query,
                         "context.original_user_text": case_result.context.original_user_text,
                         "context.detected_product": case_result.context.detected_product,
@@ -147,7 +150,7 @@ async def run_support_case_request(
                 "query_hash": short_hash(case_result.context.normalized_query),
                 "query_chars": len(case_result.context.normalized_query),
                 "vector_ref_count": len(case_result.context.vector_refs),
-                **_sensitive_trace_attrs(settings, **{"input.value": case_result.context.normalized_query}),
+                **_full_io_trace_attrs(settings, **{"input.value": case_result.context.normalized_query}),
             },
         ):
             evidence_pack = await collect_support_evidence(case_result.context, settings)
@@ -189,7 +192,7 @@ async def run_support_case_request(
                         "entrypoint": entrypoint,
                         "model": settings.support_agent_model,
                         "structured_output_requested": True,
-                        **_sensitive_trace_attrs(
+                        **_full_io_trace_attrs(
                             settings,
                             agent_input=agent_input,
                             **{"input.value": agent_input},
@@ -197,7 +200,7 @@ async def run_support_case_request(
                     },
                 ):
                     _set_current_otel_attrs(
-                        _sensitive_trace_attrs(
+                        _full_io_trace_attrs(
                             settings,
                             agent_input=agent_input,
                             **{"input.value": agent_input},
@@ -275,10 +278,20 @@ async def run_support_case_request(
                 issue_codes=[issue.code for issue in contract_issues],
                 recommended_action=coverage.recommended_action,
                 mention_enabled=coverage.mention_enabled,
-                **_sensitive_trace_attrs(settings, **{"output.value": internal_text}),
+                **_full_io_trace_attrs(
+                    settings,
+                    internal_answer=internal_text,
+                    **{"output.value": internal_text},
+                ),
             ),
         ):
-            _set_current_otel_attrs(_sensitive_trace_attrs(settings, **{"output.value": internal_text}))
+            _set_current_otel_attrs(
+                _full_io_trace_attrs(
+                    settings,
+                    internal_answer=internal_text,
+                    **{"output.value": internal_text},
+                )
+            )
             pass
 
     return SupportRuntimeResult(
@@ -289,6 +302,7 @@ async def run_support_case_request(
         answer=final_answer,
         internal_text=internal_text,
         contract_issues=contract_issues,
+        trace_include_full_io=settings.support_agent_trace_include_sensitive_data,
     )
 
 
@@ -310,10 +324,41 @@ def _run_config_metadata(
     return output
 
 
-def _sensitive_trace_attrs(settings: Settings, **attrs: object) -> dict[str, object]:
+def _full_io_trace_attrs(settings: Settings, **attrs: object) -> dict[str, object]:
     if not settings.support_agent_trace_include_sensitive_data:
         return {}
     return {key: value for key, value in attrs.items() if value is not None and value != ""}
+
+
+def _sensitive_trace_attrs(settings: Settings, **attrs: object) -> dict[str, object]:
+    return _full_io_trace_attrs(settings, **attrs)
+
+
+def _request_input_for_trace(request: SupportCaseRequest) -> str:
+    pieces: list[str] = []
+    if request.user_text:
+        pieces.append(request.user_text)
+    asset_summary = _asset_summary_for_trace(request)
+    if asset_summary:
+        pieces.append(f"附件：{asset_summary}")
+    return "\n".join(pieces)
+
+
+def _asset_summary_for_trace(request: SupportCaseRequest) -> list[dict[str, object]]:
+    output: list[dict[str, object]] = []
+    for asset in request.assets:
+        item: dict[str, object] = {
+            "asset_id": asset.asset_id,
+            "media_type": asset.media_type,
+        }
+        if asset.filename:
+            item["filename"] = asset.filename
+        if asset.mime_type:
+            item["mime_type"] = asset.mime_type
+        if asset.metadata:
+            item["metadata"] = asset.metadata
+        output.append(item)
+    return output
 
 
 def _set_current_otel_attrs(attrs: dict[str, object]) -> None:

@@ -75,7 +75,7 @@ async def run_turn(agent, settings, session: SQLiteSession, user_input: str) -> 
             entrypoint="terminal",
             group_id="terminal-chat",
             attrs=_terminal_trace_attrs(request, settings),
-        ):
+        ) as runtime_turn:
             runtime_result = await run_support_case_request(
                 request,
                 settings,
@@ -90,8 +90,9 @@ async def run_turn(agent, settings, session: SQLiteSession, user_input: str) -> 
                     "input_chars": len(user_input or ""),
                 },
             )
-        final_output = runtime_result.internal_text
-        contract_issues = runtime_result.contract_issues
+            final_output = runtime_result.internal_text
+            contract_issues = runtime_result.contract_issues
+            runtime_turn.set_output(final_output, output_kind="terminal_internal_answer", status="ready")
         _ = agent
     except OutputGuardrailTripwireTriggered as exc:
         flush_traces()
@@ -129,6 +130,12 @@ def _guardrail_messages(exc: OutputGuardrailTripwireTriggered) -> list[str]:
 
 
 def _terminal_trace_attrs(request: SupportCaseRequest, settings) -> dict[str, object]:
+    full_io_attrs = {}
+    if settings.support_agent_trace_include_sensitive_data:
+        full_io_attrs = {
+            "input.value": request.user_text or "",
+            "user.input": request.user_text or "",
+        }
     return base_trace_attrs(
         trace_kind="runtime",
         entrypoint="terminal",
@@ -142,5 +149,6 @@ def _terminal_trace_attrs(request: SupportCaseRequest, settings) -> dict[str, ob
             "loop_version": "v2",
             "model_label": active_model_label(settings),
             "input_chars": len(request.user_text or ""),
+            **full_io_attrs,
         },
     )

@@ -48,7 +48,7 @@ def render_feishu_visible_runtime_reply(result: SupportRuntimeResult) -> FeishuV
             if getattr(result, "trace_include_full_io", False):
                 full_io_attrs = {
                     "visible_reply": reply.safe_text,
-                    "output.value": reply.safe_text,
+                    "visible_reply.value": reply.safe_text,
                 }
             trace_span.span_data.data.update(
                 {

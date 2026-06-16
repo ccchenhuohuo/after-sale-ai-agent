@@ -56,7 +56,7 @@ async def openclaw_feishu_support_case(
             entrypoint="openclaw_feishu",
             group_id=group_id,
             attrs=_runtime_trace_attrs(request, settings=settings, group_id=group_id),
-        ):
+        ) as runtime_turn:
             result = await run_support_case_request(
                 request,
                 settings,
@@ -74,7 +74,13 @@ async def openclaw_feishu_support_case(
                     "input_chars": len(request.user_text or ""),
                 },
             )
-            return build_openclaw_thread_reply(result)
+            reply = build_openclaw_thread_reply(result)
+            runtime_turn.set_output(
+                str(reply.get("text") or ""),
+                output_kind="openclaw_thread_reply_payload",
+                status="payload_built",
+            )
+            return reply
     finally:
         flush_traces()
 

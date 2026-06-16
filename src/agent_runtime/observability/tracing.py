@@ -29,6 +29,13 @@ IGNORED_STATUSES = {
     "expired",
 }
 
+TURN_ONLY_TRACE_ATTRS = {
+    "input.value",
+    "output.value",
+    "user.input",
+    "request.assets",
+}
+
 
 def hash_trace_id(value: str) -> str:
     return hashlib.sha1(value.encode("utf-8")).hexdigest()[:12] if value else ""
@@ -81,6 +88,35 @@ def safe_trace_value(value: object) -> object:
     if isinstance(value, dict):
         return {str(key): safe_trace_value(item) for key, item in value.items()}
     return str(value)
+
+
+def trace_metadata_attrs(attrs: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in safe_trace_attrs(attrs).items() if key not in TURN_ONLY_TRACE_ATTRS}
+
+
+class RuntimeTurnHandle:
+    def __init__(self, span: Any | None = None, *, include_full_io: bool = False):
+        self._span = span
+        self._include_full_io = include_full_io
+
+    @property
+    def active(self) -> bool:
+        return self._span is not None
+
+    def update(self, attrs: dict[str, object]) -> None:
+        if self._span is None:
+            return
+        self._span.span_data.data.update(safe_trace_attrs(attrs))
+
+    def set_output(self, text: str, *, output_kind: str, status: str) -> None:
+        attrs: dict[str, object] = {
+            "output.kind": output_kind,
+            "output.status": status,
+            "output_chars": len(text or ""),
+        }
+        if self._include_full_io:
+            attrs["output.value"] = text or ""
+        self.update(attrs)
 
 
 def status_attrs(status: str, **extra: object) -> dict[str, object]:
@@ -190,15 +226,23 @@ def admission_trace(settings: Settings, attrs: dict[str, object]):
 @contextmanager
 def runtime_trace(settings: Settings, *, entrypoint: str, group_id: str, attrs: dict[str, object]):
     if get_current_trace() is not None:
-        yield
+        yield RuntimeTurnHandle()
         return
     with trace(
         runtime_workflow_name(entrypoint),
         group_id=group_id,
-        metadata=safe_trace_attrs(attrs),
+        metadata=trace_metadata_attrs(attrs),
         disabled=settings.support_agent_tracing_disabled,
     ):
-        yield
+        turn_attrs = {
+            "span.kind": "runtime_turn",
+            **safe_trace_attrs(attrs),
+        }
+        with custom_span("support_runtime_turn", turn_attrs) as turn_span:
+            yield RuntimeTurnHandle(
+                turn_span,
+                include_full_io=settings.support_agent_trace_include_sensitive_data,
+            )
 
 
 @contextmanager

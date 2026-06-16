@@ -27,6 +27,7 @@ from agent_runtime.feishu.responder import FeishuSdkResponder, ReplyResult
 from agent_runtime.feishu.runtime_store import RuntimeStore
 from agent_runtime.llm import configure_agents_runtime
 from agent_runtime.observability.tracing import (
+    RuntimeTurnHandle,
     admission_trace,
     base_trace_attrs,
     runtime_trace,
@@ -184,7 +185,7 @@ async def process_message_event(
                 "source": "feishu-bridge",
                 "loop_version": "v2",
             },
-        ):
+        ) as runtime_turn:
             with custom_span("feishu_event", {**trace_data, "status": "accepted"}):
                 pass
             with custom_span("admission_gate", {**trace_data, "status": gate.status}):
@@ -205,10 +206,14 @@ async def process_message_event(
                 )
                 with custom_span("queue_processing", {**trace_data, "queue_wait_ms": queue_wait_ms}):
                     if semaphore is None:
-                        status = await _process_message_event_unlocked(event, settings, runtime_store, trace_data)
+                        status = await _process_message_event_unlocked(
+                            event, settings, runtime_store, trace_data, runtime_turn
+                        )
                     else:
                         async with semaphore:
-                            status = await _process_message_event_unlocked(event, settings, runtime_store, trace_data)
+                            status = await _process_message_event_unlocked(
+                                event, settings, runtime_store, trace_data, runtime_turn
+                            )
                 with custom_span("feishu_event_status", {**trace_data, "status": status}):
                     return status
             finally:
@@ -292,6 +297,7 @@ async def _process_message_event_unlocked(
     settings: Settings,
     runtime_store: RuntimeStore,
     trace_data: dict[str, object] | None = None,
+    runtime_turn: RuntimeTurnHandle | None = None,
 ) -> str:
     trace_data = trace_data or _event_trace_data(event)
     try:
@@ -300,14 +306,19 @@ async def _process_message_event_unlocked(
     except OutputGuardrailTripwireTriggered as exc:
         runtime_store.record_event_error("agent_guardrail", event, str(exc))
         answer = FEISHU_VISIBLE_REPLY_FALLBACK
+        _set_turn_output(runtime_turn, answer, status="agent_guardrail_fallback")
     except Exception as exc:
         runtime_store.record_event_error("agent", event, str(exc))
         answer = FEISHU_VISIBLE_REPLY_FALLBACK
+        _set_turn_output(runtime_turn, answer, status="agent_error_fallback")
+    else:
+        _set_turn_output(runtime_turn, answer, status="prepared")
     try:
         reply_started_at = time.perf_counter()
         with custom_span("channel_reply", {**trace_data, "reply_target": "thread"}):
             reply_result = await reply_in_thread(event.message_id, answer, settings)
     except Exception as exc:
+        _set_turn_output(runtime_turn, answer, status="reply_failed")
         runtime_store.record_reply(event, "reply_failed", error=str(exc))
         runtime_store.record_event_error("reply", event, str(exc))
         with custom_span(
@@ -340,8 +351,15 @@ async def _process_message_event_unlocked(
         },
     ):
         pass
+    _set_turn_output(runtime_turn, answer, status="replied")
     runtime_store.record_reply(event, "replied", reply_message_id=reply_message_id)
     return "replied"
+
+
+def _set_turn_output(runtime_turn: RuntimeTurnHandle | None, text: str, *, status: str) -> None:
+    if runtime_turn is None:
+        return
+    runtime_turn.set_output(text, output_kind="feishu_visible_reply", status=status)
 
 
 def _reply_idempotency_key(message_id: str, text: str) -> str:

@@ -55,7 +55,8 @@ PHOENIX_PROJECT_NAME=agent-runtime-test
 
 当前运行时会先 intake，再收集结构化证据，最后运行结构化输出 Agent。Phoenix / OpenAI traces 中每个用户 turn 应只有一个主 Runtime Trace，内部应能看到以下业务 span：
 
-- `support_runtime_turn`：单轮售后分析入口，包含 `entrypoint`、`loop_version=v2`、request/session/chat/thread/message hash、hash 化 `session.id`、输入长度、asset 数量；完整 I/O 模式下还包含 `input.value`、`user.input` 和附件摘要。
+- `support_runtime_turn`：覆盖完整用户 turn 的 OpenInference 语义 span，包含 `entrypoint`、`loop_version=v2`、request/session/chat/thread/message hash、hash 化 `session.id`、输入长度、asset 数量；完整 I/O 模式下只在这个 span 上写 `input.value`、`user.input` 和最终 `output.value`。
+- `support_core_runtime`：Core Support Runtime 内部业务编排，包含 intake、retrieval、answer contract 等子流程。
 - `intake_pipeline` / `intake_pipeline_result`：输入路由、ingestion 和统一上下文组装。
 - `ocr_provider_call` / `visual_embedding_provider_call` / `visual_understanding_provider_call`：分别记录 OCR、图片向量化和千问 VL 结构化视觉理解调用。
 - `ingestion_ocr` / `ingestion_image_embedding` / `ingestion_visual_understanding` / `ingestion_video_sampling`：分别记录各 ingestion 工具的状态、provider、模型、耗时和 artifact 摘要 hash。
@@ -65,13 +66,13 @@ PHOENIX_PROJECT_NAME=agent-runtime-test
 - `history_search`：历史话题 RAG 检索。
 - `media_search`：媒体观察证据检索。
 - `evidence_pack`：证据包汇总，记录 SKU/正式依据/历史/媒体命中数和证据等级状态。
-- `agent_answer` / `runner_run` / `agent_answer_result`：结构化答案生成和模型运行状态。完整 I/O 模式下 `runner_run.input.value` 是实际送入模型的完整 Agent prompt。
+- `agent_answer` / `runner_run` / `agent_answer_result`：结构化答案生成和模型运行状态。完整 I/O 模式下 `runner.input.value` 是实际送入模型的完整 Agent prompt。
 - `answer_contract_check`：最终中文答案 contract 校验。
-- `answer_contract_result`：答案 contract 结果。完整 I/O 模式下 `output.value` 是内部结构化答案渲染文本。
-- `visible_reply_render`：飞书可见回复渲染和校验。完整 I/O 模式下 `output.value` 是最终发到飞书 thread 的可见回复。
+- `answer_contract_result`：答案 contract 结果。完整 I/O 模式下 `internal_answer.value` 是内部结构化答案渲染文本。
+- `visible_reply_render`：飞书可见回复渲染和校验。完整 I/O 模式下 `visible_reply.value` 是最终发到飞书 thread 的可见回复副本；Sessions 页不依赖这个子 span。
 - `channel_reply` / `channel_reply_result`：通道回复构建和结果记录。Feishu legacy 记录真实发送结果；OpenClaw channel 记录 `payload_built`，表示已构建 thread reply payload，实际发送由 sidecar 负责。
 
-trace metadata 会包含 `entrypoint`、`loop_version`、`source`、`model_label`、`request_id_hash`、`session_id_hash`、`chat_id_hash`、`thread_id_hash`、`message_id_hash` 和 hash 化 `session.id`。当前调试阶段会记录 `input.value` / `output.value`；raw vector 永远不写入 trace。
+trace metadata 会包含 `entrypoint`、`loop_version`、`source`、`model_label`、`request_id_hash`、`session_id_hash`、`chat_id_hash`、`thread_id_hash`、`message_id_hash` 和 hash 化 `session.id`。当前调试阶段的 `input.value` / `output.value` 只写在 `support_runtime_turn` span 上；raw vector 永远不写入 trace。
 
 ## Runtime Trace Span
 
@@ -105,25 +106,25 @@ Admission/debug trace 独立于 Runtime Trace。默认配置下 duplicate / igno
 Phoenix 的 Sessions 页不是自动从 `group_id` 生成的，它依赖 OpenInference 语义字段：
 
 - `session.id`：生产默认使用 hash 化 session ID。飞书会基于 `feishu:{chat_id}:thread:{thread_id}` 得到稳定 hash，OpenClaw 同理，终端基于 `terminal-chat`。
-- `input.value`：当前调试阶段默认记录。入口层记录用户原始消息和附件摘要，`intake_pipeline_result` 记录 `UnifiedCaseContext.normalized_query`，`runner_run` 记录完整 Agent prompt。
-- `output.value`：当前调试阶段默认记录。`answer_contract_result` 记录内部答案文本，`visible_reply_render` 记录最终飞书可见回复。
+- `input.value`：当前调试阶段默认记录，只在 `support_runtime_turn` 上表示本轮用户原始消息和安全附件摘要。
+- `output.value`：当前调试阶段默认记录，只在 `support_runtime_turn` 上表示最终可见输出，也就是实际准备发给 Feishu thread、OpenClaw payload 或 Terminal 的文本。
 
-因此，同一客服在同一飞书话题里多次追问时，应在 Sessions 页聚合到同一个 hash session；当前调试视图应能直接看到完整业务输入输出。
+因此，同一客服在同一飞书话题里多次追问时，应在 Sessions 页聚合到同一个 hash session；当前调试视图应能直接看到完整业务输入输出。子 span 中的 `runner.input.value`、`internal_answer.value`、`visible_reply.value` 只是调试字段，不作为 Sessions 页 first input / last output 的依据。
 
 ## 视觉验收
 
 清理后的 tracing 面板应满足：
 
 - 发送一条真实 Feishu legacy 测试消息后，按时间窗口、`message_id_hash` 或 `thread_id_hash` 过滤，只看到一个主 trace：`Feishu Support Runtime Turn`。
-- Feishu legacy 主 trace 展开后能看到完整链路：`feishu_event`、`admission_gate`、`dedup`、`queue_wait`、`queue_processing`、`agent_run`、`support_runtime_turn`、`intake_pipeline`、`retrieval_pipeline`、`agent_answer`、`runner_run`、`answer_contract_check`、`visible_reply_render`、`channel_reply`、`channel_reply_result`，其中 `channel_reply_result.reply_status` 应为 `replied` 或 `reply_failed`。
-- 发送非截图产品损坏图时，主 trace 下应同时看到 OCR 跳过或识别、`ingestion_image_embedding`、`visual_embedding_provider_call`、`ingestion_visual_understanding`、`visual_understanding_provider_call`；`runner_run.input.value` 应包含产品/部件/损伤位置/损伤类型等视觉摘要。
-- 发送聊天截图时，主 trace 下应以 OCR 为主，不应把截图误判成产品损坏图；`runner_run.input.value` 应包含 OCR 文本或归一化问题。
+- Feishu legacy 主 trace 展开后能看到完整链路：`feishu_event`、`admission_gate`、`dedup`、`queue_wait`、`queue_processing`、`agent_run`、`support_runtime_turn`、`support_core_runtime`、`intake_pipeline`、`retrieval_pipeline`、`agent_answer`、`runner_run`、`answer_contract_check`、`visible_reply_render`、`channel_reply`、`channel_reply_result`，其中 `channel_reply_result.reply_status` 应为 `replied` 或 `reply_failed`。
+- 发送非截图产品损坏图时，主 trace 下应同时看到 OCR 跳过或识别、`ingestion_image_embedding`、`visual_embedding_provider_call`、`ingestion_visual_understanding`、`visual_understanding_provider_call`；`runner.input.value` 应包含产品/部件/损伤位置/损伤类型等视觉摘要。
+- 发送聊天截图时，主 trace 下应以 OCR 为主，不应把截图误判成产品损坏图；`runner.input.value` 应包含 OCR 文本或归一化问题。
 - OpenClaw live 请求只出现一个主 trace：`OpenClaw Support Runtime Turn`，其中 `channel_reply_result.reply_status=payload_built` 且 `reply_transport=payload_only`。
 - Terminal 普通 turn 只出现一个主 trace：`Terminal Support Runtime Turn`；Terminal 不要求 `channel_reply` 或 `channel_reply_result`。
 - `contractOnly=true` 和默认 smoke 不产生 Runtime Trace。
 - `visible_reply_render`、`channel_reply`、`answer_contract_result` 不应作为单独的 `$0 / 0ms` trace 出现在主 trace 后面。
 - 真实 token/cost 只体现在主 runtime trace 上；回复渲染和发送只作为主 trace 子 span。
-- Sessions 页可以看到 hash 化 `session.id`，同一话题连续两轮消息应聚合在同一个 session 下，并显示可读的 first input / last output。
+- Sessions 页可以看到 hash 化 `session.id`，同一话题连续两轮消息应聚合在同一个 session 下，并显示来自 `support_runtime_turn` 的可读 first input / last output。
 - 验收截图至少保留 trace 列表视图和主 trace 展开后的 span tree。
 
 ## 查看方式

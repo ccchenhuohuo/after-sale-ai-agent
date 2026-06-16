@@ -78,9 +78,8 @@ async def run_support_case_request(
     runtime_full_io_attrs = _full_io_trace_attrs(
         settings,
         **{
-            "session.id": trace_session_id,
-            "input.value": _request_input_for_trace(request),
-            "user.input": raw_issue,
+            "core.input.value": _request_input_for_trace(request),
+            "core.user.input": raw_issue,
             "request.assets": _asset_summary_for_trace(request),
             "chat_id": request.chat_id,
             "thread_id": request.thread_id,
@@ -89,7 +88,7 @@ async def run_support_case_request(
         },
     )
     with custom_span(
-        "support_runtime_turn",
+        "support_core_runtime",
         {
             "entrypoint": entrypoint,
             "trace_kind": "runtime",
@@ -126,7 +125,7 @@ async def run_support_case_request(
                 **_full_io_trace_attrs(
                     settings,
                     **{
-                        "input.value": case_result.context.normalized_query,
+                        "context.input.value": case_result.context.normalized_query,
                         "context.normalized_query": case_result.context.normalized_query,
                         "context.original_user_text": case_result.context.original_user_text,
                         "context.detected_product": case_result.context.detected_product,
@@ -150,7 +149,7 @@ async def run_support_case_request(
                 "query_hash": short_hash(case_result.context.normalized_query),
                 "query_chars": len(case_result.context.normalized_query),
                 "vector_ref_count": len(case_result.context.vector_refs),
-                **_full_io_trace_attrs(settings, **{"input.value": case_result.context.normalized_query}),
+                **_full_io_trace_attrs(settings, **{"retrieval.input.value": case_result.context.normalized_query}),
             },
         ):
             evidence_pack = await collect_support_evidence(case_result.context, settings)
@@ -195,7 +194,7 @@ async def run_support_case_request(
                         **_full_io_trace_attrs(
                             settings,
                             agent_input=agent_input,
-                            **{"input.value": agent_input},
+                            **{"runner.input.value": agent_input},
                         ),
                     },
                 ):
@@ -203,7 +202,7 @@ async def run_support_case_request(
                         _full_io_trace_attrs(
                             settings,
                             agent_input=agent_input,
-                            **{"input.value": agent_input},
+                            **{"runner.input.value": agent_input},
                         )
                     )
                     result = await Runner.run(
@@ -281,7 +280,7 @@ async def run_support_case_request(
                 **_full_io_trace_attrs(
                     settings,
                     internal_answer=internal_text,
-                    **{"output.value": internal_text},
+                    **{"internal_answer.value": internal_text},
                 ),
             ),
         ):
@@ -289,7 +288,7 @@ async def run_support_case_request(
                 _full_io_trace_attrs(
                     settings,
                     internal_answer=internal_text,
-                    **{"output.value": internal_text},
+                    **{"internal_answer.value": internal_text},
                 )
             )
             pass

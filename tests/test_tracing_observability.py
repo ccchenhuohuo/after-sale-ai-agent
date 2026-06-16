@@ -10,6 +10,7 @@ import agent_runtime.copilot.ingestion as ingestion
 import agent_runtime.copilot.runtime as support_runtime
 import agent_runtime.feishu.bridge as bridge
 import agent_runtime.observability.tracing as obs_tracing
+import agent_runtime.terminal.runtime as terminal_runtime
 from agent_runtime.copilot.answer_contract import SupportAnswer
 from agent_runtime.copilot.case_context import (
     AssetRouteDecision,
@@ -35,6 +36,30 @@ class FakeSpan:
         if self._sink is not None:
             self._sink.append((self.name, dict(self.span_data.data)))
         return False
+
+
+class FakeTurn:
+    def __init__(self, attrs: dict, *, include_full_io: bool = True):
+        self.attrs = attrs
+        self.include_full_io = include_full_io
+
+    @property
+    def active(self):
+        return True
+
+    def update(self, attrs: dict):
+        self.attrs.update(attrs)
+
+    def set_output(self, text: str, *, output_kind: str, status: str):
+        self.attrs.update(
+            {
+                "output.kind": output_kind,
+                "output.status": status,
+                "output_chars": len(text or ""),
+            }
+        )
+        if self.include_full_io:
+            self.attrs["output.value"] = text or ""
 
 
 def settings_for_tmp(tmp_path, **overrides):
@@ -148,6 +173,19 @@ def test_core_runtime_does_not_flush_traces():
     assert "flush_traces(" not in source
 
 
+def test_core_runtime_namespaces_internal_io_fields():
+    source = Path(support_runtime.__file__).read_text(encoding="utf-8")
+
+    assert '"support_core_runtime"' in source
+    assert '"support_runtime_turn"' not in source
+    assert '"runner.input.value"' in source
+    assert '"retrieval.input.value"' in source
+    assert '"context.input.value"' in source
+    assert '"internal_answer.value"' in source
+    assert '"input.value": agent_input' not in source
+    assert '"output.value": internal_text' not in source
+
+
 def test_span_if_tracing_without_active_trace_does_not_create_span(monkeypatch):
     calls = []
 
@@ -187,22 +225,70 @@ def test_runtime_trace_nested_current_trace_does_not_create_second_root_trace(mo
     monkeypatch.setattr(obs_tracing, "get_current_trace", lambda: object())
     monkeypatch.setattr(obs_tracing, "trace", fake_trace)
 
-    with obs_tracing.runtime_trace(Settings(), entrypoint="feishu", group_id="group", attrs={"trace_kind": "runtime"}):
-        pass
+    with obs_tracing.runtime_trace(Settings(), entrypoint="feishu", group_id="group", attrs={"trace_kind": "runtime"}) as turn:
+        assert not turn.active
 
     assert trace_calls == []
+
+
+def test_runtime_trace_creates_turn_span_and_updates_output(monkeypatch):
+    trace_calls = []
+    spans = []
+
+    def fake_trace(*args, **kwargs):
+        trace_calls.append((args, kwargs))
+        return FakeSpan("runtime_trace")
+
+    monkeypatch.setattr(obs_tracing, "get_current_trace", lambda: None)
+    monkeypatch.setattr(obs_tracing, "trace", fake_trace)
+    monkeypatch.setattr(obs_tracing, "custom_span", lambda name, attrs=None: FakeSpan(name, attrs, spans))
+
+    attrs = {
+        "trace_kind": "runtime",
+        "entrypoint": "feishu",
+        "session.id": "session-hash",
+        "input.value": "客户原始问题",
+        "user.input": "客户原始问题",
+    }
+    with obs_tracing.runtime_trace(Settings(), entrypoint="feishu", group_id="group", attrs=attrs) as turn:
+        assert turn.active
+        turn.set_output("最终可见回复", output_kind="feishu_visible_reply", status="replied")
+
+    assert len(trace_calls) == 1
+    assert "input.value" not in trace_calls[0][1]["metadata"]
+    assert "user.input" not in trace_calls[0][1]["metadata"]
+    assert spans == [
+        (
+            "support_runtime_turn",
+            {
+                "span.kind": "runtime_turn",
+                "trace_kind": "runtime",
+                "entrypoint": "feishu",
+                "session.id": "session-hash",
+                "input.value": "客户原始问题",
+                "user.input": "客户原始问题",
+                "output.kind": "feishu_visible_reply",
+                "output.status": "replied",
+                "output_chars": len("最终可见回复"),
+                "output.value": "最终可见回复",
+            },
+        )
+    ]
 
 
 def test_accepted_feishu_runtime_trace_contains_reply_render_and_reply_spans(monkeypatch, tmp_path):
     bridge.clear_runtime_state_for_tests()
     runtime_traces = []
+    turn_spans = []
     spans = []
     flushes = []
 
     @contextmanager
     def fake_runtime_trace(settings, *, entrypoint, group_id, attrs):
-        runtime_traces.append({"entrypoint": entrypoint, "group_id": group_id, **attrs})
-        yield
+        runtime_traces.append({"entrypoint": entrypoint, "group_id": group_id, **obs_tracing.trace_metadata_attrs(attrs)})
+        turn_span = {"span.kind": "runtime_turn", "entrypoint": entrypoint, "group_id": group_id, **attrs}
+        turn_spans.append(turn_span)
+        yield FakeTurn(turn_span, include_full_io=settings.support_agent_trace_include_sensitive_data)
 
     async def fake_agent(event, settings):
         result = SimpleNamespace(
@@ -229,6 +315,7 @@ def test_accepted_feishu_runtime_trace_contains_reply_render_and_reply_spans(mon
     assert asyncio.run(bridge.process_message_event(feishu_event(), settings)) == "replied"
 
     assert len(runtime_traces) == 1
+    assert len(turn_spans) == 1
     assert runtime_traces[0]["trace_kind"] == "runtime"
     assert runtime_traces[0]["entrypoint"] == "feishu"
     assert runtime_traces[0]["session.id"]
@@ -239,27 +326,37 @@ def test_accepted_feishu_runtime_trace_contains_reply_render_and_reply_spans(mon
     assert "session_id" not in runtime_traces[0]
     assert "chat_id" not in runtime_traces[0]
     assert "message_id" not in runtime_traces[0]
-    assert runtime_traces[0]["input.value"] == "@飞书 CLI L023 不亮"
-    assert runtime_traces[0]["user.input"] == "@飞书 CLI L023 不亮"
+    assert "input.value" not in runtime_traces[0]
+    assert "user.input" not in runtime_traces[0]
+    assert turn_spans[0]["input.value"] == "@飞书 CLI L023 不亮"
+    assert turn_spans[0]["user.input"] == "@飞书 CLI L023 不亮"
+    assert turn_spans[0]["output.value"]
+    assert turn_spans[0]["output.kind"] == "feishu_visible_reply"
+    assert turn_spans[0]["output.status"] == "replied"
     span_names = [name for name, _ in spans]
     assert "visible_reply_render" in span_names
     assert "channel_reply" in span_names
     assert "channel_reply_result" in span_names
     visible_reply_span = dict(spans)["visible_reply_render"]
-    assert visible_reply_span["output.value"]
-    assert visible_reply_span["visible_reply"] == visible_reply_span["output.value"]
+    assert "output.value" not in visible_reply_span
+    assert visible_reply_span["visible_reply.value"]
+    assert visible_reply_span["visible_reply"] == visible_reply_span["visible_reply.value"]
+    assert turn_spans[0]["output.value"] == visible_reply_span["visible_reply.value"]
     assert flushes == ["flush"]
 
 
 def test_openclaw_support_case_uses_one_runtime_trace_for_runtime_and_reply(monkeypatch):
     runtime_traces = []
+    turn_spans = []
     spans = []
     flushes = []
 
     @contextmanager
     def fake_runtime_trace(settings, *, entrypoint, group_id, attrs):
-        runtime_traces.append({"entrypoint": entrypoint, "group_id": group_id, **attrs})
-        yield
+        runtime_traces.append({"entrypoint": entrypoint, "group_id": group_id, **obs_tracing.trace_metadata_attrs(attrs)})
+        turn_span = {"span.kind": "runtime_turn", "entrypoint": entrypoint, "group_id": group_id, **attrs}
+        turn_spans.append(turn_span)
+        yield FakeTurn(turn_span, include_full_io=settings.support_agent_trace_include_sensitive_data)
 
     async def fake_run_support_case_request(request, settings, **kwargs):
         return SimpleNamespace(
@@ -300,6 +397,7 @@ def test_openclaw_support_case_uses_one_runtime_trace_for_runtime_and_reply(monk
 
     assert reply["mode"] == "thread_reply"
     assert len(runtime_traces) == 1
+    assert len(turn_spans) == 1
     assert runtime_traces[0]["entrypoint"] == "openclaw_feishu"
     assert runtime_traces[0]["trace_kind"] == "runtime"
     assert runtime_traces[0]["message_id_hash"]
@@ -313,12 +411,18 @@ def test_openclaw_support_case_uses_one_runtime_trace_for_runtime_and_reply(monk
     assert "chat_id" not in runtime_traces[0]
     assert "thread_id" not in runtime_traces[0]
     assert "message_id" not in runtime_traces[0]
-    assert runtime_traces[0]["input.value"] == "客户反馈 L023 不亮"
-    assert runtime_traces[0]["user.input"] == "客户反馈 L023 不亮"
+    assert "input.value" not in runtime_traces[0]
+    assert "user.input" not in runtime_traces[0]
+    assert turn_spans[0]["input.value"] == "客户反馈 L023 不亮"
+    assert turn_spans[0]["user.input"] == "客户反馈 L023 不亮"
+    assert turn_spans[0]["output.value"] == reply["text"]
+    assert turn_spans[0]["output.kind"] == "openclaw_thread_reply_payload"
+    assert turn_spans[0]["output.status"] == "payload_built"
     assert {name for name, _ in spans} >= {"visible_reply_render", "channel_reply", "channel_reply_result"}
     visible_reply_span = dict(spans)["visible_reply_render"]
-    assert visible_reply_span["output.value"]
-    assert visible_reply_span["visible_reply"] == visible_reply_span["output.value"]
+    assert "output.value" not in visible_reply_span
+    assert visible_reply_span["visible_reply.value"]
+    assert visible_reply_span["visible_reply"] == visible_reply_span["visible_reply.value"]
     assert visible_reply_span["output_chars"] > 0
     reply_result_span = dict(spans)["channel_reply_result"]
     assert reply_result_span["reply_status"] == "payload_built"
@@ -364,6 +468,40 @@ def test_openclaw_contract_only_does_not_create_runtime_trace(monkeypatch):
     assert runtime_traces == []
     assert flushes == []
     assert spans == []
+
+
+def test_terminal_turn_records_turn_level_input_and_output(monkeypatch, capsys):
+    runtime_traces = []
+    turn_spans = []
+    flushes = []
+
+    @contextmanager
+    def fake_runtime_trace(settings, *, entrypoint, group_id, attrs):
+        runtime_traces.append({"entrypoint": entrypoint, "group_id": group_id, **obs_tracing.trace_metadata_attrs(attrs)})
+        turn_span = {"span.kind": "runtime_turn", "entrypoint": entrypoint, "group_id": group_id, **attrs}
+        turn_spans.append(turn_span)
+        yield FakeTurn(turn_span, include_full_io=settings.support_agent_trace_include_sensitive_data)
+
+    async def fake_run_support_case_request(request, settings, **kwargs):
+        return SimpleNamespace(internal_text="终端最终输出", contract_issues=[])
+
+    monkeypatch.setattr(terminal_runtime, "runtime_trace", fake_runtime_trace)
+    monkeypatch.setattr(terminal_runtime, "run_support_case_request", fake_run_support_case_request)
+    monkeypatch.setattr(terminal_runtime, "flush_traces", lambda: flushes.append("flush"))
+
+    asyncio.run(terminal_runtime.run_turn(object(), Settings(), object(), "L023 不亮"))
+
+    assert len(runtime_traces) == 1
+    assert runtime_traces[0]["entrypoint"] == "terminal"
+    assert "input.value" not in runtime_traces[0]
+    assert len(turn_spans) == 1
+    assert turn_spans[0]["input.value"] == "L023 不亮"
+    assert turn_spans[0]["user.input"] == "L023 不亮"
+    assert turn_spans[0]["output.value"] == "终端最终输出"
+    assert turn_spans[0]["output.kind"] == "terminal_internal_answer"
+    assert turn_spans[0]["output.status"] == "ready"
+    assert flushes == ["flush"]
+    assert "终端最终输出" in capsys.readouterr().out
 
 
 def test_retrieval_spans_include_tool_like_attributes(monkeypatch):

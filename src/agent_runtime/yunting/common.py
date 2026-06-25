@@ -10,8 +10,8 @@ SOURCE_TYPE = "yunting_service_history_faq"
 REFERENCE_CLASS = "support_history_faq"
 AUTHORITY_LEVEL = "low"
 AUTHORITY_SCORE = 0.45
-TEXT_COLLECTION = "yunting_service_text_v1"
-MEDIA_COLLECTION = "yunting_service_media_v1"
+TEXT_COLLECTION = "yunting_service_text_v1_dev"
+MEDIA_COLLECTION = "yunting_service_media_v1_dev"
 
 
 def now_ts() -> str:

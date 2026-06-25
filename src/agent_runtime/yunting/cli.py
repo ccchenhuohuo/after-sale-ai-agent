@@ -7,7 +7,7 @@ from typing import Any
 
 from agent_runtime.yunting.api import YuntingClient, default_time_window, message_tree_preview, write_raw_run
 from agent_runtime.yunting.doris import DorisStreamLoadAdapter
-from agent_runtime.yunting.pipeline import build_yunting_layers, load_raw_sessions, load_raw_sessions_from_dir, write_layers
+from agent_runtime.yunting.pipeline import build_yunting_layers, extract_sessions, load_raw_sessions, load_raw_sessions_from_dir, write_layers
 from agent_runtime.yunting.qdrant import QdrantAdapter, text_points_from_ads
 
 
@@ -49,10 +49,54 @@ def _load_sessions_arg(args: argparse.Namespace) -> list[dict[str, Any]]:
     return load_raw_sessions_from_dir(Path(args.input_dir))
 
 
+def _load_page_payloads_arg(args: argparse.Namespace) -> list[dict[str, Any]]:
+    candidates: list[Path] = []
+    if args.input_file:
+        path = Path(args.input_file)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return [payload] if isinstance(payload, dict) and isinstance(payload.get("result"), dict) else []
+
+    input_dir = Path(args.input_dir)
+    if input_dir.name == "sessions" and input_dir.parent.name:
+        candidates.extend(sorted((input_dir.parent / "api_pages").glob("*.json")))
+    candidates.extend(sorted(input_dir.rglob("api_pages/*.json")))
+
+    payloads: list[dict[str, Any]] = []
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
+            payloads.append(payload)
+    return payloads
+
+
 def cmd_dry_run_layers(args: argparse.Namespace) -> None:
     current_run_id = args.run_id or run_id()
     sessions = _load_sessions_arg(args)
-    layers, manifest = build_yunting_layers(sessions, run_id=current_run_id, raw_file_path=args.input_file or args.input_dir)
+    page_payloads = _load_page_payloads_arg(args)
+    if page_payloads:
+        page_sessions: dict[str, dict[str, Any]] = {}
+        for payload in page_payloads:
+            for session in extract_sessions(payload):
+                unique_id = str(session.get("unique") or session.get("unique_id") or "")
+                if unique_id:
+                    page_sessions[unique_id] = session
+        if page_sessions:
+            session_by_id = {str(session.get("unique") or session.get("unique_id") or ""): session for session in sessions}
+            session_by_id.update(page_sessions)
+            sessions = list(session_by_id.values())
+    layers, manifest = build_yunting_layers(
+        sessions,
+        run_id=current_run_id,
+        raw_file_path=args.input_file or args.input_dir,
+        page_payloads=page_payloads,
+        text_collection=env("QDRANT_TEXT_COLLECTION", "yunting_service_text_v1_dev"),
+        media_collection=env("QDRANT_MEDIA_COLLECTION", "yunting_service_media_v1_dev"),
+    )
     output_dir = Path(args.output_dir) / current_run_id
     write_layers(output_dir, layers, manifest)
     print(json.dumps({"run_id": current_run_id, "output_dir": str(output_dir), **manifest.to_dict()}, ensure_ascii=False, indent=2))

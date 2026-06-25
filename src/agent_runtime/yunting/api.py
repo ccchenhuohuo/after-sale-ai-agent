@@ -38,6 +38,11 @@ class YuntingClient:
         payload = response.json()
         if isinstance(payload, dict):
             payload["_request"] = request_body
+            code = payload.get("code")
+            if code not in (20000, "20000"):
+                message = payload.get("msg", "")
+                trace_id = payload.get("traceId", "")
+                raise RuntimeError(f"Yunting service API failed: code={code}, msg={message}, traceId={trace_id}")
         return payload
 
     def pull_service_sessions(

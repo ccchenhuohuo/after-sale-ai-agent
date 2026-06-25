@@ -342,6 +342,8 @@ def build_yunting_layers(
     run_id: str,
     raw_file_path: str = "",
     page_payloads: list[dict[str, Any]] | None = None,
+    text_collection: str = TEXT_COLLECTION,
+    media_collection: str = MEDIA_COLLECTION,
 ) -> tuple[LayerRows, PipelineManifest]:
     run_ts = now_ts()
     layers = empty_layers()
@@ -491,7 +493,7 @@ def build_yunting_layers(
                 }
             )
 
-    _build_ads_and_dm(layers, run_id, run_ts)
+    _build_ads_and_dm(layers, run_id, run_ts, text_collection=text_collection, media_collection=media_collection)
     manifest = PipelineManifest(
         run_id=run_id,
         raw_session_count=len(layers["ods_api_yunting_service_session_raw_f_d"]),
@@ -504,7 +506,14 @@ def build_yunting_layers(
     return layers, manifest
 
 
-def _build_ads_and_dm(layers: LayerRows, run_id: str, run_ts: str) -> None:
+def _build_ads_and_dm(
+    layers: LayerRows,
+    run_id: str,
+    run_ts: str,
+    *,
+    text_collection: str,
+    media_collection: str,
+) -> None:
     for chunk in layers["dws_yunting_service_faq_chunk_d"]:
         payload = {
             "chunk_id": chunk["chunk_id"],
@@ -520,8 +529,8 @@ def _build_ads_and_dm(layers: LayerRows, run_id: str, run_ts: str) -> None:
         }
         layers["ads_agent_yunting_faq_vector_api_d"].append(
             {
-                "point_id": stable_id(TEXT_COLLECTION, chunk["chunk_id"]),
-                "collection_name": TEXT_COLLECTION,
+                "point_id": stable_id(text_collection, chunk["chunk_id"]),
+                "collection_name": text_collection,
                 "chunk_id": chunk["chunk_id"],
                 "case_id": chunk["case_id"],
                 "unique_id": chunk["unique_id"],
@@ -541,6 +550,10 @@ def _build_ads_and_dm(layers: LayerRows, run_id: str, run_ts: str) -> None:
             }
         )
 
+    media_object_keys = {
+        row["asset_id"]: row.get("media_object_key", "")
+        for row in layers["dwd_api_yunting_service_media_asset_f_d"]
+    }
     for media in layers["dws_yunting_service_media_observation_d"]:
         payload = {
             "media_chunk_id": media["media_chunk_id"],
@@ -556,15 +569,15 @@ def _build_ads_and_dm(layers: LayerRows, run_id: str, run_ts: str) -> None:
         }
         layers["ads_agent_yunting_media_vector_api_d"].append(
             {
-                "point_id": stable_id(MEDIA_COLLECTION, media["media_chunk_id"]),
-                "collection_name": MEDIA_COLLECTION,
+                "point_id": stable_id(media_collection, media["media_chunk_id"]),
+                "collection_name": media_collection,
                 "media_chunk_id": media["media_chunk_id"],
                 "asset_id": media["asset_id"],
                 "unique_id": media["unique_id"],
                 "vector_model": "qwen3-vl-embedding",
                 "vector_dimension": 1024,
                 "payload_json": compact_json(payload),
-                "media_object_key": "",
+                "media_object_key": media_object_keys.get(media["asset_id"], ""),
                 "sync_status": "pending",
                 "last_synced_at": "",
                 "error_message": "",

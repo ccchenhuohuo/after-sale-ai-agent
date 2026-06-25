@@ -1,7 +1,10 @@
 import json
+import argparse
 from pathlib import Path
 
 from agent_runtime.yunting import dagster_defs
+from agent_runtime.yunting import cli as yunting_cli
+from agent_runtime.yunting.api import YuntingClient
 from agent_runtime.yunting.common import SOURCE_TYPE
 from agent_runtime.yunting.doris import DorisStreamLoadAdapter
 from agent_runtime.yunting.pipeline import build_yunting_layers, extract_sessions
@@ -61,6 +64,7 @@ def test_authority_payload_is_preserved_for_qdrant_rows():
     ads_rows = layers["ads_agent_yunting_faq_vector_api_d"]
     payload = json.loads(ads_rows[0]["payload_json"])
 
+    assert ads_rows[0]["collection_name"] == "yunting_service_text_v1_dev"
     assert payload["source_type"] == SOURCE_TYPE
     assert payload["reference_class"] == "support_history_faq"
     assert payload["authority_level"] == "low"
@@ -70,6 +74,15 @@ def test_authority_payload_is_preserved_for_qdrant_rows():
     assert points[0].id == ads_rows[0]["point_id"]
     assert len(points[0].vector) == 8
     assert points[0].payload["authority_score"] == 0.45
+
+
+def test_media_ads_preserves_pending_media_object_key():
+    layers, _ = build_yunting_layers(load_fixture_sessions(), run_id="test_run", raw_file_path=str(FIXTURE))
+    ads_rows = layers["ads_agent_yunting_media_vector_api_d"]
+
+    assert ads_rows
+    assert {row["collection_name"] for row in ads_rows} == {"yunting_service_media_v1_dev"}
+    assert all(row["media_object_key"].startswith("media/sha256/pending/") for row in ads_rows)
 
 
 def test_doris_stream_load_plan_is_dry_run_and_deterministic():
@@ -103,3 +116,61 @@ def test_qdrant_dry_run_delete_and_upsert_are_explicit():
 def test_dagster_handoff_module_imports_without_hard_dependency():
     assert dagster_defs.YUNTING_WEEKLY_CRON == "0 3 * * 1"
     assert dagster_defs.YUNTING_EXECUTION_TIMEZONE == "Asia/Shanghai"
+
+
+def test_cli_dry_run_layers_loads_api_page_logs(tmp_path):
+    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    raw_root = tmp_path / "raw" / "sample_run"
+    api_dir = raw_root / "api_pages"
+    sessions_dir = raw_root / "sessions"
+    api_dir.mkdir(parents=True)
+    sessions_dir.mkdir()
+    (api_dir / "page_0001.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    args = argparse.Namespace(
+        input_file="",
+        input_dir=str(sessions_dir),
+        output_dir=str(tmp_path / "layers"),
+        run_id="sample_run",
+    )
+
+    yunting_cli.cmd_dry_run_layers(args)
+
+    page_rows = [
+        json.loads(line)
+        for line in (tmp_path / "layers" / "sample_run" / "ods_api_yunting_service_page_log_d.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    dashboard_rows = [
+        json.loads(line)
+        for line in (tmp_path / "layers" / "sample_run" / "ads_agent_yunting_pipeline_dashboard_d.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(page_rows) == 1
+    assert page_rows[0]["response_code"] == 20000
+    assert page_rows[0]["trace_id"] == "trace-structural-sample"
+    assert dashboard_rows[0]["api_page_count"] == 1
+
+
+def test_yunting_client_rejects_business_error(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"code": 40100, "msg": "bad token", "traceId": "trace-error"}
+
+    def fake_post(url, headers, json, timeout):
+        assert url == "https://opendata.yuntingai.com/api/comment/v1/service/pull"
+        return Response()
+
+    monkeypatch.setattr("agent_runtime.yunting.api.httpx.post", fake_post)
+    client = YuntingClient(base_url="https://opendata.yuntingai.com", access_token="test-token")
+
+    try:
+        client.pull_service_page(project_id="project")
+    except RuntimeError as exc:
+        assert "code=40100" in str(exc)
+        assert "trace-error" in str(exc)
+    else:
+        raise AssertionError("expected business-code failure")

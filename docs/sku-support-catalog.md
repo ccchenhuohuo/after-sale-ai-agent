@@ -123,7 +123,7 @@ data/sku_catalog/processed/2026-05-26/sku_support_catalog-2026-05-26.csv
 当前运行时接入：
 
 - `SKU_CATALOG_PATH` 指向生成的 CSV。
-- `ulanzi after-sell copilot` 暴露 `search_sku_catalog` 作为 Agents SDK 工具。
+- `VIJIM-after-sale-copilot` 暴露 `search_sku_catalog` 作为 Agents SDK 工具。
 - 工具用于识别 SKU、SPU、SKU 名、产品名和产品负责人，以便流转/升级。
 - 工具不得作为正式故障依据、政策依据、保修逻辑或维修指导。
 

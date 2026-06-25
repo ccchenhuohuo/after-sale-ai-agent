@@ -7,7 +7,6 @@ import time
 from agents import Runner, SQLiteSession, custom_span
 from agents.memory import SessionSettings
 from openai import AsyncOpenAI, BadRequestError
-from opentelemetry import trace as otel_trace
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_runtime.copilot.answer_contract import (
@@ -22,10 +21,10 @@ from agent_runtime.copilot.context_assembly import build_data_source_coverage
 from agent_runtime.copilot.evidence import SupportEvidencePack, evidence_pack_trace_attributes, short_hash
 from agent_runtime.copilot.evidence_collection import collect_support_evidence
 from agent_runtime.copilot.pipeline import build_support_case_context
-from agent_runtime.copilot.prompts import build_agent_input
+from agent_runtime.copilot.prompts import SUPPORT_COPILOT_INSTRUCTIONS, build_agent_input
 from agent_runtime.copilot.support_copilot import build_support_copilot
 from agent_runtime.llm import build_run_config
-from agent_runtime.observability.tracing import elapsed_ms, hash_trace_id, status_attrs
+from agent_runtime.observability.tracing import elapsed_ms, hash_trace_id, set_current_otel_attrs, status_attrs
 from agent_runtime.settings import Settings
 from agent_runtime.tools.history_rag import history_rag_index_available
 from agent_runtime.tools.formal_kb import formal_kb_index_available
@@ -33,6 +32,7 @@ from agent_runtime.tools.media_rag import media_rag_index_available
 
 
 logger = logging.getLogger(__name__)
+JSON_MIME_TYPE = "application/json"
 
 
 class SupportRuntimeResult(BaseModel):
@@ -101,7 +101,7 @@ async def run_support_case_request(
             **runtime_full_io_attrs,
         },
     ):
-        _set_current_otel_attrs(runtime_full_io_attrs)
+        set_current_otel_attrs(runtime_full_io_attrs)
         intake_started_at = time.perf_counter()
         with custom_span(
             "intake_pipeline",
@@ -191,20 +191,10 @@ async def run_support_case_request(
                         "entrypoint": entrypoint,
                         "model": settings.support_agent_model,
                         "structured_output_requested": True,
-                        **_full_io_trace_attrs(
-                            settings,
-                            agent_input=agent_input,
-                            **{"runner.input.value": agent_input},
-                        ),
+                        **_runner_prompt_trace_attrs(settings, agent_input),
                     },
                 ):
-                    _set_current_otel_attrs(
-                        _full_io_trace_attrs(
-                            settings,
-                            agent_input=agent_input,
-                            **{"runner.input.value": agent_input},
-                        )
-                    )
+                    set_current_otel_attrs(_runner_prompt_trace_attrs(settings, agent_input))
                     result = await Runner.run(
                         agent,
                         agent_input,
@@ -284,7 +274,7 @@ async def run_support_case_request(
                 ),
             ),
         ):
-            _set_current_otel_attrs(
+            set_current_otel_attrs(
                 _full_io_trace_attrs(
                     settings,
                     internal_answer=internal_text,
@@ -333,6 +323,50 @@ def _sensitive_trace_attrs(settings: Settings, **attrs: object) -> dict[str, obj
     return _full_io_trace_attrs(settings, **attrs)
 
 
+def _runner_prompt_trace_attrs(settings: Settings, agent_input: str) -> dict[str, object]:
+    return _full_io_trace_attrs(
+        settings,
+        agent_input=agent_input,
+        **{
+            "runner.input.value": agent_input,
+            "runner.system_instructions.value": SUPPORT_COPILOT_INSTRUCTIONS,
+            "runner.prompt.note": (
+                "The child llm generation span contains the actual chat-completions messages, "
+                "including session-expanded history, when trace_include_sensitive_data=true."
+            ),
+        },
+    )
+
+
+def _llm_messages_trace_attrs(
+    *,
+    input_messages: list[dict[str, str]] | None = None,
+    output_messages: list[dict[str, str]] | None = None,
+) -> dict[str, object]:
+    attrs: dict[str, object] = {}
+    if input_messages is not None:
+        attrs.update(_message_trace_attrs("llm.input_messages", input_messages))
+    if output_messages is not None:
+        attrs.update(_message_trace_attrs("llm.output_messages", output_messages))
+    return attrs
+
+
+def _message_trace_attrs(prefix: str, messages: list[dict[str, str]]) -> dict[str, object]:
+    attrs: dict[str, object] = {}
+    for index, message in enumerate(messages):
+        role = message.get("role")
+        content = message.get("content")
+        if role:
+            attrs[f"{prefix}.{index}.message.role"] = role
+        if content:
+            attrs[f"{prefix}.{index}.message.content"] = content
+    return attrs
+
+
+def _json_trace_value(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
 def _request_input_for_trace(request: SupportCaseRequest) -> str:
     pieces: list[str] = []
     if request.user_text:
@@ -360,23 +394,6 @@ def _asset_summary_for_trace(request: SupportCaseRequest) -> list[dict[str, obje
     return output
 
 
-def _set_current_otel_attrs(attrs: dict[str, object]) -> None:
-    if not attrs:
-        return
-    try:
-        current_span = otel_trace.get_current_span()
-        for key, value in attrs.items():
-            current_span.set_attribute(key, _otel_attr_value(value))
-    except Exception:
-        logger.debug("Failed to set current OpenTelemetry span attributes", exc_info=True)
-
-
-def _otel_attr_value(value: object) -> str | int | float | bool:
-    if isinstance(value, (str, int, float, bool)):
-        return value
-    return json.dumps(value, ensure_ascii=False, default=str)
-
-
 def _is_response_format_unavailable(exc: BadRequestError) -> bool:
     return "response_format" in str(exc) and "unavailable" in str(exc).lower()
 
@@ -387,11 +404,18 @@ async def _run_support_answer_json_fallback(
     evidence_pack: SupportEvidencePack,
 ) -> SupportAnswer:
     system_prompt = _support_answer_json_fallback_instructions()
+    input_messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": agent_input},
+    ]
     sensitive_input_attrs = _sensitive_trace_attrs(
         settings,
         **{
             "llm.input_messages.system": system_prompt,
             "llm.input_messages.user": agent_input,
+            "input.value": _json_trace_value(input_messages),
+            "input.mime_type": JSON_MIME_TYPE,
+            **_llm_messages_trace_attrs(input_messages=input_messages),
         },
     )
     span = custom_span(
@@ -404,23 +428,26 @@ async def _run_support_answer_json_fallback(
         },
     )
     with span:
-        _set_current_otel_attrs(sensitive_input_attrs)
+        set_current_otel_attrs(sensitive_input_attrs)
         client = AsyncOpenAI(base_url=settings.llm_base_url, api_key=settings.llm_api_key)
         response = await client.chat.completions.create(
             model=settings.support_agent_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": agent_input},
-            ],
+            messages=input_messages,
             response_format={"type": "json_object"},
         )
         content = response.choices[0].message.content or "{}"
+        output_messages = [{"role": "assistant", "content": content}]
         sensitive_output_attrs = _sensitive_trace_attrs(
             settings,
-            **{"llm.response.content": content},
+            **{
+                "llm.response.content": content,
+                "output.value": _json_trace_value(output_messages),
+                "output.mime_type": JSON_MIME_TYPE,
+                **_llm_messages_trace_attrs(output_messages=output_messages),
+            },
         )
         span.span_data.data.update(sensitive_output_attrs)
-        _set_current_otel_attrs(sensitive_output_attrs)
+        set_current_otel_attrs(sensitive_output_attrs)
     try:
         return SupportAnswer.model_validate_json(content)
     except Exception:

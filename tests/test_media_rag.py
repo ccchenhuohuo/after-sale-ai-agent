@@ -384,3 +384,30 @@ def test_bailian_vl_rerank_resolves_relative_media_path_from_manifest(tmp_path, 
 
     assert calls
     assert scores == {"image": 0.91}
+
+
+def test_media_relevance_filter_rejects_low_score_generic_overlap():
+    result = media_rag.MediaSearchResult(
+        chunk={"chunk_id": "generic", "text": "客户反馈 产品 图片"},
+        similarity_score=0.07,
+        rerank_score=0.55,
+        matched_reasons=["关键词重叠：客户、反馈、产品", "媒体类型：image"],
+    )
+
+    filtered = media_rag._filter_relevant_results([result], product_model="")
+
+    assert filtered == []
+
+
+def test_media_relevance_filter_keeps_visual_vector_match():
+    result = media_rag.MediaSearchResult(
+        chunk={"chunk_id": "visual", "text": "图片证据"},
+        similarity_score=0.01,
+        rerank_score=0.1,
+        matched_reasons=["视觉向量引用命中"],
+        score_source="vec_query",
+    )
+
+    filtered = media_rag._filter_relevant_results([result], product_model="")
+
+    assert filtered == [result]

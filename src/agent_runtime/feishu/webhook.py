@@ -13,7 +13,7 @@ from agent_runtime.feishu.bridge import event_from_payload, process_message_even
 from agent_runtime.settings import Settings, get_settings
 
 
-app = FastAPI(title="ulanzi after-sell copilot Feishu webhook")
+app = FastAPI(title="VIJIM-after-sale-copilot Feishu webhook")
 app.include_router(openclaw_feishu_router)
 
 

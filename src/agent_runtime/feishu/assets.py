@@ -10,6 +10,7 @@ from urllib.parse import quote
 import httpx
 
 from agent_runtime.copilot.case_context import SupportAsset, SupportCaseRequest
+from agent_runtime.copilot.reference_safety import redact_internal_references
 from agent_runtime.feishu.message_sender import FEISHU_BASE_URL, get_tenant_access_token
 from agent_runtime.settings import Settings
 
@@ -94,13 +95,16 @@ async def _download_asset(
             if status:
                 return _asset_with_download_error(asset, status)
     except Exception as exc:
+        error_type = type(exc).__name__
+        status_code = _exception_status_code(exc)
         logger.warning(
-            "Failed to download Feishu asset: message_id_hash=%s file_key_hash=%s error=%s",
+            "Failed to download Feishu asset: message_id_hash=%s file_key_hash=%s error_type=%s status_code=%s",
             _short_hash(asset.message_id),
             _short_hash(asset.file_key),
-            exc,
+            error_type,
+            status_code or "",
         )
-        return _asset_with_download_error(asset, f"{type(exc).__name__}: {exc}")
+        return _asset_with_download_error(asset, f"{error_type}: {redact_internal_references(exc, max_chars=300)}")
 
     return _asset_with_download_status(
         asset.model_copy(
@@ -173,6 +177,12 @@ def _json_error_message(response: httpx.Response) -> str:
     code = payload.get("code") if isinstance(payload, dict) else None
     msg = payload.get("msg") if isinstance(payload, dict) else None
     return f"Feishu resource API error code={code} msg={msg}"
+
+
+def _exception_status_code(exc: Exception) -> int | None:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    return int(status_code) if isinstance(status_code, int) else None
 
 
 async def _read_limited_response(response: httpx.Response, max_bytes: int) -> bytes:

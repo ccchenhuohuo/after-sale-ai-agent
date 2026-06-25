@@ -1,1 +1,1 @@
-"""Terminal runtime helpers for ulanzi after-sell copilot."""
+"""Terminal runtime helpers for VIJIM-after-sale-copilot."""

@@ -12,7 +12,7 @@
 
 ```mermaid
 flowchart TB
-    terminal["终端对话<br/>chatcopilot / agent_mvp.py"] --> terminal_adapter["Terminal Adapter"]
+    terminal["终端对话<br/>VIJIMcopilot / agent_mvp.py"] --> terminal_adapter["Terminal Adapter"]
     legacy_feishu["飞书话题群<br/>legacy SDK 长连接"] --> legacy_bridge["Legacy Feishu Bridge<br/>admission / dedup / queue / ledger / thread reply"]
     openclaw["OpenClaw Lark/Feishu Sidecar<br/>gateway / media / outbound"] --> openclaw_channel["OpenClaw Feishu Channel<br/>HTTP compatibility endpoint"]
     future_im["未来 IM 平台<br/>企业微信 / 微信 / Slack"] --> future_channel["Channel Adapter<br/>platform event -> SupportCaseRequest"]
@@ -28,7 +28,7 @@ flowchart TB
     ingestion --> context["UnifiedCaseContext<br/>normalized query / OCR text / visual summaries / vector refs"]
     context --> evidence["support evidence collector"]
     evidence --> agent_runner["OpenAI Agents SDK<br/>Runner.run"]
-    agent_runner --> copilot["ulanzi after-sell copilot<br/>Pydantic SupportAnswer"]
+    agent_runner --> copilot["VIJIM-after-sale-copilot<br/>Pydantic SupportAnswer"]
     copilot --> runtime_result["SupportRuntimeResult"]
     runtime_result --> feishu_reply["Channel Responder<br/>Feishu visible reply / OpenClaw thread payload"]
 

@@ -6,7 +6,7 @@ from agent_runtime.copilot.prompts import SUPPORT_COPILOT_INSTRUCTIONS
 
 def build_support_copilot(model_name: str) -> Agent:
     return Agent(
-        name="ulanzi after-sell copilot",
+        name="VIJIM-after-sale-copilot",
         instructions=SUPPORT_COPILOT_INSTRUCTIONS,
         model=model_name,
         tools=[],

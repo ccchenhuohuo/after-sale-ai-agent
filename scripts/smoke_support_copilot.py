@@ -23,7 +23,7 @@ import numpy as np
 from fastapi.testclient import TestClient
 
 from agent_runtime.channels.feishu_reply import render_feishu_visible_runtime_reply
-from agent_runtime.copilot.answer_contract import SupportAnswer
+from agent_runtime.copilot.answer_contract import FEISHU_VISIBLE_REPLY_FALLBACK, SupportAnswer
 from agent_runtime.copilot.case_context import SupportAsset, SupportCaseRequest
 from agent_runtime.copilot.runtime import run_support_case_request
 from agent_runtime.feishu.events import event_from_payload
@@ -180,9 +180,7 @@ def _run_async_scenario(request: SupportCaseRequest, settings: Settings) -> dict
             "recommended_action": result.coverage.recommended_action,
             "mention_enabled": result.coverage.mention_enabled,
             "hit_sources": [item.source_id for item in result.coverage.items if item.status == "hit"],
-            "missing_sources": [
-                item.source_id for item in result.coverage.items if item.status in {"missing", "not_configured"}
-            ],
+            "missing_sources": [item.source_id for item in result.coverage.items if item.status != "hit"],
         },
         "final_answer": {
             "recommended_action": result.answer.recommended_action,
@@ -570,8 +568,7 @@ def _check_report_no_sensitive_artifacts(report: dict[str, Any]) -> dict[str, An
 def _assert_runtime_result(request: SupportCaseRequest, result: Any, visible_text: str) -> None:
     assert result.request.request_id == request.request_id
     assert result.case_result.context.normalized_query.strip()
-    assert result.coverage.mention_enabled is False
-    assert result.answer.mention_enabled is False
+    assert result.answer.mention_enabled == result.coverage.mention_enabled
     assert result.answer.recommended_action == result.coverage.recommended_action or _action_rank(
         result.answer.recommended_action
     ) >= _action_rank(result.coverage.recommended_action)
@@ -589,6 +586,16 @@ def _assert_runtime_result(request: SupportCaseRequest, result: Any, visible_tex
     )
     assert visible_text.strip()
     assert not any(token in visible_text for token in forbidden_visible_tokens)
+    if _has_any_source_hit(result):
+        assert visible_text != FEISHU_VISIBLE_REPLY_FALLBACK
+        assert "客服可以先这样回应客户" in visible_text
+        if result.coverage.recommended_action == "human_review":
+            assert result.coverage.mention_enabled is True
+            assert "建议人工复核" in visible_text
+    else:
+        assert result.coverage.recommended_action == "human_review"
+        assert result.coverage.mention_enabled is True
+        assert visible_text == FEISHU_VISIBLE_REPLY_FALLBACK
     raw = result.model_dump(mode="json") if hasattr(result, "model_dump") else {}
     raw_text = json.dumps(raw, ensure_ascii=False)
     assert "[0.0" not in raw_text
@@ -608,6 +615,13 @@ def _action_rank(action: str) -> int:
     return {"answer": 0, "ask_clarification": 1, "human_review": 2}.get(action, 0)
 
 
+def _has_any_source_hit(result: Any) -> bool:
+    return any(
+        getattr(item, "status", "") == "hit" and int(getattr(item, "hit_count", 0) or 0) > 0
+        for item in result.coverage.items
+    )
+
+
 def _fixed_support_answer(*args: Any, **kwargs: Any) -> SimpleNamespace:
     return SimpleNamespace(final_output=_support_answer())
 
@@ -624,7 +638,7 @@ def _support_answer() -> SupportAnswer:
         troubleshooting_steps=["确认充电线、插头和接口是否正常", "确认是否长按开机键并观察指示灯", "补充产品铭牌或订单信息"],
         follow_up_questions=["请提供订单号或产品型号", "请补充清晰的产品状态照片"],
         official_evidence="未查询到可信正式依据，不可编造。",
-        history_reference="命中已审核群聊历史 FAQ，可作为可靠售后参考；不是正式政策源。",
+        history_reference="未查询到可信历史参考，不可编造。",
         data_sources_used=[],
         missing_data_sources=[],
         recommended_action="answer",

@@ -11,6 +11,8 @@ from agent_runtime.settings import Settings, get_settings
 
 
 ROOT = Path(__file__).resolve().parents[3]
+MIN_CODE_MATCH_CHARS = 3
+MIN_TEXT_MATCH_CHARS = 2
 
 
 def _clean(value: Any) -> str:
@@ -58,35 +60,52 @@ def _score_row(row: Dict[str, str], query: str) -> tuple[int, list[str]]:
         "product_owner_name": _clean(row.get("product_owner_name")),
     }
 
-    if sku and sku == query_upper:
+    if _is_meaningful_code(sku) and sku == query_upper:
         score += 100
         reasons.append("sku精确匹配")
-    elif sku and sku in query_tokens:
+    elif _is_meaningful_code(sku) and sku in query_tokens:
         score += 85
         reasons.append("sku token匹配")
-    elif sku and sku in query_upper:
+    elif _allows_substring_code_match(sku) and sku in query_upper:
         score += 70
         reasons.append("sku包含匹配")
 
-    if spu and spu == query_upper:
+    if _is_meaningful_code(spu) and spu == query_upper:
         score += 70
         reasons.append("spu精确匹配")
-    elif spu and spu in query_tokens:
+    elif _is_meaningful_code(spu) and spu in query_tokens:
         score += 55
         reasons.append("spu token匹配")
-    elif spu and spu in query_upper:
+    elif _allows_substring_code_match(spu) and spu in query_upper:
         score += 40
         reasons.append("spu包含匹配")
 
     for field_name, value in fields.items():
-        if value and value in query:
+        if _is_meaningful_text_match(value) and value in query:
             score += 30
             reasons.append(f"{field_name}包含匹配")
-        elif value and query and query in value:
+        elif _is_meaningful_text_match(query) and query in value:
             score += 20
             reasons.append(f"query命中{field_name}")
 
     return score, reasons
+
+
+def _is_meaningful_code(value: str) -> bool:
+    compact = re.sub(r"[^A-Z0-9]", "", value.upper())
+    return len(compact) >= MIN_CODE_MATCH_CHARS
+
+
+def _allows_substring_code_match(value: str) -> bool:
+    compact = re.sub(r"[^A-Z0-9]", "", value.upper())
+    return _is_meaningful_code(compact) and not compact.isdigit()
+
+
+def _is_meaningful_text_match(value: str) -> bool:
+    clean = _clean(value)
+    if len(clean) < MIN_TEXT_MATCH_CHARS:
+        return False
+    return not re.fullmatch(r"\d+", clean)
 
 
 def resolve_sku_evidence(query: str, limit: int = 5, settings: Optional[Settings] = None) -> list[SkuEvidence]:

@@ -1,11 +1,17 @@
 from functools import lru_cache
 import os
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    def __init__(self, **values):
+        if os.getenv("AGENT_RUNTIME_DISABLE_DOTENV") == "1" and "_env_file" not in values:
+            values["_env_file"] = None
+        super().__init__(**values)
 
     llm_api_key: str = ""
     llm_base_url: str = "https://api.deepseek.com"
@@ -57,15 +63,15 @@ class Settings(BaseSettings):
     support_agent_openai_hosted_tracing_enabled: bool = False
     support_agent_tracing_disabled: bool = True
     support_agent_trace_include_sensitive_data: bool = True
-    support_agent_trace_workflow_name: str = "ulanzi after-sell copilot MVP"
+    support_agent_trace_workflow_name: str = "VIJIM-after-sale-copilot"
     support_trace_admission_mode: str = "sample"
     support_trace_duplicate_events: bool = False
     support_trace_ignored_events: bool = False
     support_trace_admission_sample_rate: float = 0.05
     support_trace_runtime_pipeline: bool = True
     phoenix_tracing_enabled: bool = False
-    phoenix_collector_endpoint: str = "http://opencloud.taild79054.ts.net:6006/v1/traces"
-    phoenix_project_name: str = "agent-runtime-test"
+    phoenix_collector_endpoint: str = "http://100.111.223.41:6006/v1/traces"
+    phoenix_project_name: str = "VIJIM-after-sale-copilot"
 
     feishu_app_id: str = ""
     feishu_app_secret: str = ""
@@ -76,9 +82,20 @@ class Settings(BaseSettings):
     feishu_reply_max_chars: int = 3500
     feishu_runtime_db_path: str = "data/feishu_runtime/runtime.sqlite3"
     feishu_bot_open_id: str = ""
+    feishu_human_review_mention_enabled: bool = False
+    feishu_human_review_user_open_id: str = ""
+    feishu_human_review_user_name: str = "鲁工"
     feishu_allowed_user_open_ids: str = ""
     feishu_event_concurrency: int = 5
     feishu_event_max_age_seconds: int = 1800
+    feishu_message_admission_mode: Literal["mention_only", "listen_new_topics"] = "mention_only"
+    feishu_thread_context_enabled: bool = True
+    feishu_thread_context_max_messages: int = 80
+    feishu_thread_context_max_chars: int = 12000
+    feishu_thread_context_include_bot: bool = False
+    feishu_working_reaction_enabled: bool = True
+    feishu_working_reaction_emoji_type: str = "OnIt"
+    feishu_working_reaction_timeout_seconds: float = 10.0
     feishu_backfill_enabled: bool = True
     feishu_backfill_interval_seconds: float = 10.0
     feishu_backfill_lookback_seconds: int = 180
@@ -86,6 +103,8 @@ class Settings(BaseSettings):
     feishu_bot_loop_max_turns: int = 3
     feishu_dedup_ttl_seconds: int = 43200
     feishu_dedup_max_items: int = 5000
+    feishu_processing_stale_seconds: int = 600
+    feishu_agent_run_timeout_seconds: float = 540.0
     feishu_media_auto_accept_enabled: bool = False
     feishu_asset_download_enabled: bool = True
     feishu_asset_cache_dir: str = "data/feishu_runtime/assets"

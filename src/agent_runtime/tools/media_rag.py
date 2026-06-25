@@ -19,6 +19,7 @@ from agent_runtime.settings import Settings, get_settings
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DIMENSION = 1024
 REMOTE_TEXT_MAX_CHARS = 1200
+MIN_RELEVANT_RERANK_SCORE = 0.65
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".ico", ".dib", ".icns", ".sgi"}
 SKU_RE = re.compile(r"\b[A-Z]{1,4}\d{2,5}[A-Z0-9-]*\b")
 VECTOR_ID_RE = re.compile(r"^vec_[A-Za-z0-9_-]{1,96}$")
@@ -461,7 +462,10 @@ def search_media_rag(
                 )
             )
         results.sort(key=lambda result: result.rerank_score, reverse=True)
-        results = results[:top_n]
+        results = _filter_relevant_results(results, product_model=product_model)[:top_n]
+
+    if not results:
+        return "未查询到可信媒体观察证据：没有命中足够相关的相似媒体记录。"
 
     with custom_span(
         "media_result_pack",
@@ -478,3 +482,20 @@ def search_media_rag(
                 *[_format_result(result) for result in results],
             ]
         )
+
+
+def _filter_relevant_results(
+    results: list[MediaSearchResult],
+    *,
+    product_model: str | None,
+) -> list[MediaSearchResult]:
+    return [result for result in results if _is_relevant_result(result, product_model=product_model)]
+
+
+def _is_relevant_result(result: MediaSearchResult, *, product_model: str | None) -> bool:
+    reasons = "；".join(result.matched_reasons)
+    if product_model and "SKU/型号过滤命中" in reasons:
+        return True
+    if result.score_source != "text":
+        return True
+    return result.rerank_score >= MIN_RELEVANT_RERANK_SCORE

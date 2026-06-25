@@ -60,7 +60,6 @@ def run_contract_smoke(settings: Settings | None = None, *, allow_unconfigured_s
         "replyToMessageId": payload["replyToMessageId"],
         "recommendedAction": payload.get("metadata", {}).get("recommendedAction", ""),
         "requiresSecret": bool(health.get("requiresSecret")),
-        "secretConfigured": bool(health.get("secretConfigured")),
         "allowUnconfiguredSecret": allow_unconfigured_secret,
         "textPreview": str(payload.get("fallbackText") or payload.get("text") or "")[:160],
     }

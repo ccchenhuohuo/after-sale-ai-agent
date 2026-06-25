@@ -37,7 +37,7 @@ async def compact_context(settings, session: SQLiteSession) -> None:
     compactor = build_compactor(settings.support_agent_model)
     result = await Runner.run(
         compactor,
-        "请压缩以下终端会话上下文，供后续 ulanzi after-sell copilot 继续参考：\n\n" + transcript,
+        "请压缩以下终端会话上下文，供后续 VIJIM-after-sale-copilot 继续参考：\n\n" + transcript,
         run_config=build_run_config(
             settings,
             group_id="terminal-chat",

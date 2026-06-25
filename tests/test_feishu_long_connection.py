@@ -11,6 +11,7 @@ def _settings(**overrides):
         "feishu_support_group_chat_id": "oc_target",
         "feishu_bot_mention_name": "飞书 CLI",
         "feishu_event_max_age_seconds": 0,
+        "feishu_message_admission_mode": "mention_only",
     }
     values.update(overrides)
     return Settings(**values)
@@ -28,8 +29,9 @@ def _openapi_message(
     sender_type: str = "user",
     msg_type: str = "text",
     mentions=None,
+    **extra,
 ):
-    return {
+    payload = {
         "chat_id": "oc_target",
         "message_id": message_id,
         "msg_type": msg_type,
@@ -37,6 +39,8 @@ def _openapi_message(
         "mentions": mentions or [],
         "sender": {"id": sender_id, "sender_type": sender_type},
     }
+    payload.update(extra)
+    return payload
 
 
 def _sdk_message_payload(*, sender_id: str, sender_type: str = "user"):
@@ -106,6 +110,55 @@ def test_backfill_admission_rejects_user_text_without_trigger():
     payload = _openapi_message(message_id="om_no_trigger", text="普通同步消息")
 
     admission = long_connection._backfill_payload_admission(payload, _settings(), _bot_identity())
+
+    assert not admission.accepted
+    assert admission.status == "skipped_no_trigger"
+
+
+def test_backfill_admission_accepts_unmentioned_root_in_listen_new_topics_mode():
+    payload = _openapi_message(message_id="om_new_topic", text="L023 收到后不亮")
+
+    admission = long_connection._backfill_payload_admission(
+        payload,
+        _settings(feishu_message_admission_mode="listen_new_topics"),
+        _bot_identity(),
+    )
+
+    assert admission.accepted
+    assert admission.status == "accepted"
+
+
+def test_backfill_admission_accepts_root_id_equal_message_id_in_listen_new_topics_mode():
+    payload = _openapi_message(
+        message_id="om_new_topic",
+        text="L023 收到后不亮",
+        root_id="om_new_topic",
+    )
+
+    admission = long_connection._backfill_payload_admission(
+        payload,
+        _settings(feishu_message_admission_mode="listen_new_topics"),
+        _bot_identity(),
+    )
+
+    assert admission.accepted
+    assert admission.status == "accepted"
+
+
+def test_backfill_admission_ignores_unmentioned_thread_reply_in_listen_new_topics_mode():
+    payload = _openapi_message(
+        message_id="om_reply",
+        text="补充一句",
+        thread_id="omt_thread",
+        root_id="om_root",
+        parent_id="om_parent",
+    )
+
+    admission = long_connection._backfill_payload_admission(
+        payload,
+        _settings(feishu_message_admission_mode="listen_new_topics"),
+        _bot_identity(),
+    )
 
     assert not admission.accepted
     assert admission.status == "skipped_no_trigger"

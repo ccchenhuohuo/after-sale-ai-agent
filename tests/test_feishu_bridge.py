@@ -28,6 +28,7 @@ from agent_runtime.feishu.bridge import (
 from agent_runtime.feishu.event_sources import payload_from_lark_oapi_event
 from agent_runtime.feishu.responder import FeishuSdkResponder, ReplyResult, truncate_for_feishu
 from agent_runtime.feishu.runtime_store import RuntimeStore
+from agent_runtime.feishu.event_sources import ThreadContext
 from agent_runtime.feishu.webhook import _challenge_response, _verify_token
 from agent_runtime.settings import Settings
 
@@ -38,6 +39,10 @@ def settings_for_tmp(tmp_path, **overrides):
         "feishu_bot_mention_name": "飞书 CLI",
         "feishu_runtime_db_path": str(tmp_path / "runtime.sqlite3"),
         "support_agent_session_db_path": str(tmp_path / "agent_sessions.sqlite3"),
+        "feishu_human_review_mention_enabled": False,
+        "feishu_human_review_user_open_id": "",
+        "feishu_human_review_user_name": "鲁工",
+        "feishu_working_reaction_enabled": False,
     }
     values.update(overrides)
     return Settings(**values)
@@ -257,6 +262,70 @@ def test_feishu_adapter_converts_video_message_to_support_asset(tmp_path):
     assert "video_v3_abc" not in request.assets[0].asset_id
 
 
+def test_bridge_attaches_thread_context_to_request(monkeypatch, tmp_path):
+    settings = settings_for_tmp(tmp_path)
+    request = SupportCaseRequest(
+        request_id="case_1",
+        source="feishu",
+        user_text="现在怎么处理",
+        metadata={"message_type": "text"},
+    )
+    event = FeishuMessageEvent(
+        event_id="evt_1",
+        chat_id="oc_target",
+        chat_type="group",
+        message_id="om_msg",
+        message_type="text",
+        sender_id="ou_sender",
+        content="@飞书 CLI 现在怎么处理",
+        mention_names=("飞书 CLI",),
+        thread_id="omt_thread",
+    )
+
+    async def fake_context(event_arg, settings_arg, bot_identity):
+        assert event_arg is event
+        assert settings_arg is settings
+        assert bot_identity.names == ("飞书 CLI",)
+        return ThreadContext("1. 客户A: L023 不亮\n2. 客服B: 插电无反应", message_count=2)
+
+    monkeypatch.setattr(bridge, "build_thread_context_for_event", fake_context)
+
+    enriched = asyncio.run(bridge._attach_thread_context_to_request(request, event, settings))
+
+    assert "当前触发消息" in enriched.user_text
+    assert "现在怎么处理" in enriched.user_text
+    assert "客户A: L023 不亮" in enriched.user_text
+    assert enriched.metadata["message_type"] == "text"
+    assert enriched.metadata["thread_context_message_count"] == 2
+    assert enriched.metadata["thread_context_truncated"] is False
+
+
+def test_bridge_thread_context_failure_falls_back_to_current_request(monkeypatch, tmp_path):
+    settings = settings_for_tmp(tmp_path)
+    request = SupportCaseRequest(request_id="case_1", source="feishu", user_text="当前消息")
+    event = FeishuMessageEvent(
+        event_id="evt_1",
+        chat_id="oc_target",
+        chat_type="group",
+        message_id="om_msg",
+        message_type="text",
+        sender_id="ou_sender",
+        content="@飞书 CLI 当前消息",
+        mention_names=("飞书 CLI",),
+        thread_id="omt_thread",
+    )
+
+    async def failing_context(event_arg, settings_arg, bot_identity):
+        raise RuntimeError("missing im:message:readonly")
+
+    monkeypatch.setattr(bridge, "build_thread_context_for_event", failing_context)
+
+    enriched = asyncio.run(bridge._attach_thread_context_to_request(request, event, settings))
+
+    assert enriched is request
+    assert enriched.user_text == "当前消息"
+
+
 def test_feishu_asset_downloader_sets_local_path(monkeypatch, tmp_path):
     captured = {}
 
@@ -469,6 +538,41 @@ def test_feishu_agent_downloads_assets_before_core_runtime(monkeypatch, tmp_path
     assert "客服可以先这样回应客户" in reply
 
 
+def test_human_review_reply_appends_feishu_mention(tmp_path):
+    settings = settings_for_tmp(
+        tmp_path,
+        feishu_human_review_mention_enabled=True,
+        feishu_human_review_user_open_id="ou_lugong",
+        feishu_human_review_user_name="鲁工",
+    )
+    result = SimpleNamespace(
+        answer=SimpleNamespace(recommended_action="human_review", mention_enabled=True),
+        coverage=SimpleNamespace(recommended_action="human_review", mention_enabled=True),
+    )
+
+    reply = bridge.append_human_review_mention("当前资料不足，建议人工复核。", result, settings)
+
+    assert '<at user_id="ou_lugong">鲁工</at>' in reply
+    assert "资料不足，麻烦" in reply
+
+
+def test_human_review_reply_does_not_append_mention_for_answer_action(tmp_path):
+    settings = settings_for_tmp(
+        tmp_path,
+        feishu_human_review_mention_enabled=True,
+        feishu_human_review_user_open_id="ou_lugong",
+        feishu_human_review_user_name="鲁工",
+    )
+    result = SimpleNamespace(
+        answer=SimpleNamespace(recommended_action="answer", mention_enabled=False),
+        coverage=SimpleNamespace(recommended_action="answer", mention_enabled=False),
+    )
+
+    reply = bridge.append_human_review_mention("可以先按保守口径回复。", result, settings)
+
+    assert "<at " not in reply
+
+
 def test_should_handle_event_requires_target_group_and_trigger():
     settings = Settings(
         feishu_support_group_chat_id="oc_target",
@@ -539,7 +643,7 @@ def test_should_handle_event_allows_prefix_trigger():
     assert should_handle_event(event, settings)
 
 
-def test_should_handle_event_accepts_media_only_when_enabled_for_target_group():
+def test_should_handle_event_mention_only_ignores_unmentioned_media_even_if_legacy_media_enabled():
     event = FeishuMessageEvent(
         event_id="evt_image",
         chat_id="oc_target",
@@ -559,16 +663,75 @@ def test_should_handle_event_accepts_media_only_when_enabled_for_target_group():
         feishu_support_group_chat_id="oc_target",
         feishu_media_auto_accept_enabled=True,
     )
-    enabled_without_whitelist = Settings(feishu_media_auto_accept_enabled=True)
-    enabled_other_group = Settings(
-        feishu_support_group_chat_id="oc_other",
-        feishu_media_auto_accept_enabled=True,
-    )
 
     assert not should_handle_event(event, disabled)
-    assert should_handle_event(event, enabled)
-    assert not should_handle_event(event, enabled_without_whitelist)
-    assert not should_handle_event(event, enabled_other_group)
+    assert not should_handle_event(event, enabled)
+
+
+def test_should_handle_event_listen_new_topics_accepts_unmentioned_root_message():
+    settings = Settings(
+        feishu_support_group_chat_id="oc_target",
+        feishu_message_admission_mode="listen_new_topics",
+    )
+    event = FeishuMessageEvent(
+        event_id="evt_1",
+        chat_id="oc_target",
+        chat_type="group",
+        message_id="om_root",
+        message_type="text",
+        sender_id="ou_sender",
+        content="L023 收到后不亮",
+    )
+
+    gate = should_accept(event, settings)
+
+    assert gate.accepted
+    assert gate.status == "accepted_new_topic"
+
+
+def test_should_handle_event_listen_new_topics_ignores_unmentioned_thread_reply():
+    settings = Settings(
+        feishu_support_group_chat_id="oc_target",
+        feishu_message_admission_mode="listen_new_topics",
+    )
+    event = FeishuMessageEvent(
+        event_id="evt_1",
+        chat_id="oc_target",
+        chat_type="group",
+        message_id="om_reply",
+        message_type="text",
+        sender_id="ou_sender",
+        content="补充一句",
+        thread_id="omt_thread",
+        root_id="om_root",
+        parent_id="om_parent",
+    )
+
+    assert should_accept(event, settings).status == "ignored"
+
+
+def test_should_handle_event_listen_new_topics_accepts_root_media_placeholder_case():
+    settings = Settings(
+        feishu_support_group_chat_id="oc_target",
+        feishu_message_admission_mode="listen_new_topics",
+    )
+    event = FeishuMessageEvent(
+        event_id="evt_image",
+        chat_id="oc_target",
+        chat_type="group",
+        message_id="om_image",
+        message_type="image",
+        sender_id="ou_sender",
+        content="",
+        raw_content='{"image_key":"img_v3_abc"}',
+    )
+
+    assert should_accept(event, settings).status == "accepted_new_topic"
+
+
+def test_settings_rejects_unknown_feishu_admission_mode():
+    with pytest.raises(ValueError):
+        Settings(feishu_message_admission_mode="listen_everything")
 
 
 def test_should_handle_event_allows_comma_separated_target_groups():
@@ -1016,6 +1179,123 @@ def test_openapi_message_payload_duplicate_is_deduped(monkeypatch, tmp_path):
     assert calls == [("agent", "om_poll_msg"), ("reply", "om_poll_msg")]
 
 
+def test_working_reaction_lifecycle_surrounds_agent_and_reply(monkeypatch, tmp_path):
+    clear_runtime_state_for_tests()
+    calls = []
+
+    async def fake_create(message_id, settings):
+        calls.append(("create_reaction", message_id))
+        return SimpleNamespace(message_id=message_id, reaction_id="react_1", emoji_type="OnIt")
+
+    async def fake_delete(reaction, settings):
+        calls.append(("delete_reaction", reaction.reaction_id))
+
+    async def fake_agent(event, settings):
+        calls.append(("agent", event.message_id))
+        return "answer"
+
+    async def fake_reply(message_id, text, settings=None):
+        calls.append(("reply", message_id))
+        return ReplyResult(status="replied", reply_message_id="om_reply")
+
+    class FakeRuntimeStore:
+        def record_sender_turn(self, event, is_bot_sender):
+            return 0
+
+        def claim_event(self, event):
+            return SimpleNamespace(status="processing", should_process=True)
+
+        def record_reply(self, event, status, reply_message_id="", error=""):
+            calls.append(("record_reply", status, reply_message_id))
+
+        def record_event_error(self, stage, event, error):
+            calls.append(("record_event_error", stage))
+
+    monkeypatch.setattr(bridge, "create_working_reaction", fake_create)
+    monkeypatch.setattr(bridge, "delete_working_reaction", fake_delete)
+    monkeypatch.setattr(bridge, "run_support_agent_for_event", fake_agent)
+    monkeypatch.setattr(bridge, "reply_in_thread", fake_reply)
+    settings = settings_for_tmp(tmp_path, feishu_working_reaction_enabled=True)
+    event = FeishuMessageEvent(
+        event_id="evt_1",
+        chat_id="oc_target",
+        chat_type="group",
+        message_id="om_msg",
+        message_type="text",
+        sender_id="ou_sender",
+        content="@飞书 CLI L023 不亮",
+        mention_names=("飞书 CLI",),
+    )
+
+    assert asyncio.run(bridge.process_message_event(event, settings, runtime_store=FakeRuntimeStore())) == "replied"
+    assert calls == [
+        ("create_reaction", "om_msg"),
+        ("agent", "om_msg"),
+        ("reply", "om_msg"),
+        ("delete_reaction", "react_1"),
+        ("record_reply", "replied", "om_reply"),
+    ]
+
+
+def test_working_reaction_is_removed_when_reply_fails(monkeypatch, tmp_path):
+    clear_runtime_state_for_tests()
+    calls = []
+
+    async def fake_create(message_id, settings):
+        calls.append(("create_reaction", message_id))
+        return SimpleNamespace(message_id=message_id, reaction_id="react_1", emoji_type="OnIt")
+
+    async def fake_delete(reaction, settings):
+        calls.append(("delete_reaction", reaction.reaction_id))
+
+    async def fake_agent(event, settings):
+        calls.append(("agent", event.message_id))
+        return "answer"
+
+    async def failing_reply(message_id, text, settings=None):
+        calls.append(("reply", message_id))
+        raise RuntimeError("reply target missing")
+
+    class FakeRuntimeStore:
+        def record_sender_turn(self, event, is_bot_sender):
+            return 0
+
+        def claim_event(self, event):
+            return SimpleNamespace(status="processing", should_process=True)
+
+        def record_reply(self, event, status, reply_message_id="", error=""):
+            calls.append(("record_reply", status))
+
+        def record_event_error(self, stage, event, error):
+            calls.append(("record_event_error", stage))
+
+    monkeypatch.setattr(bridge, "create_working_reaction", fake_create)
+    monkeypatch.setattr(bridge, "delete_working_reaction", fake_delete)
+    monkeypatch.setattr(bridge, "run_support_agent_for_event", fake_agent)
+    monkeypatch.setattr(bridge, "reply_in_thread", failing_reply)
+    settings = settings_for_tmp(tmp_path, feishu_working_reaction_enabled=True)
+    event = FeishuMessageEvent(
+        event_id="evt_1",
+        chat_id="oc_target",
+        chat_type="group",
+        message_id="om_msg",
+        message_type="text",
+        sender_id="ou_sender",
+        content="@飞书 CLI L023 不亮",
+        mention_names=("飞书 CLI",),
+    )
+
+    assert asyncio.run(bridge.process_message_event(event, settings, runtime_store=FakeRuntimeStore())) == "reply_failed"
+    assert calls == [
+        ("create_reaction", "om_msg"),
+        ("agent", "om_msg"),
+        ("reply", "om_msg"),
+        ("delete_reaction", "react_1"),
+        ("record_reply", "reply_failed"),
+        ("record_event_error", "reply"),
+    ]
+
+
 def test_expired_event_is_not_processed(monkeypatch, tmp_path):
     clear_runtime_state_for_tests()
     calls = []
@@ -1222,14 +1502,23 @@ def test_feishu_agent_session_uses_persistent_db(monkeypatch, tmp_path):
     monkeypatch.setattr(support_runtime, "build_support_copilot", lambda model: object())
 
     async def fake_collect(raw_issue, settings):
-        from agent_runtime.copilot.evidence import SupportEvidencePack
+        from agent_runtime.copilot.evidence import SkuEvidence, SupportEvidencePack
 
         return SupportEvidencePack(
             raw_issue_hash="hash",
             query_chars=issue_text_len(raw_issue),
             issue_type="unknown",
-            product_model="",
-            sku=[],
+            product_model="L023",
+            sku=[
+                SkuEvidence(
+                    status="hit",
+                    evidence_level="identity_only",
+                    verified=True,
+                    query_hash="hash",
+                    sku="L023",
+                    score=1.0,
+                )
+            ],
             official=[],
             history=[],
             media=[],
@@ -1284,14 +1573,23 @@ def test_feishu_agent_returns_visible_natural_reply(monkeypatch, tmp_path):
     monkeypatch.setattr(support_runtime, "build_support_copilot", lambda model: object())
 
     async def fake_collect(raw_issue, settings):
-        from agent_runtime.copilot.evidence import SupportEvidencePack
+        from agent_runtime.copilot.evidence import SkuEvidence, SupportEvidencePack
 
         return SupportEvidencePack(
             raw_issue_hash="hash",
             query_chars=issue_text_len(raw_issue),
             issue_type="unknown",
-            product_model="",
-            sku=[],
+            product_model="L023",
+            sku=[
+                SkuEvidence(
+                    status="hit",
+                    evidence_level="identity_only",
+                    verified=True,
+                    query_hash="hash",
+                    sku="L023",
+                    score=1.0,
+                )
+            ],
             official=[],
             history=[],
             media=[],
@@ -1424,6 +1722,49 @@ def test_feishu_agent_failure_fallback_does_not_expose_internal_error(monkeypatc
     assert replies == [FEISHU_VISIBLE_REPLY_FALLBACK]
     assert "password" not in replies[0]
     assert "错误" not in replies[0]
+
+
+def test_feishu_agent_timeout_falls_back_and_records_reply(monkeypatch, tmp_path):
+    clear_runtime_state_for_tests()
+    calls = []
+
+    async def slow_agent(event, settings):
+        calls.append(("agent", event.message_id))
+        await asyncio.sleep(1)
+        return "late answer"
+
+    async def fake_reply(message_id, text, settings=None):
+        calls.append(("reply", message_id, text))
+        return ReplyResult(status="replied", reply_message_id="om_reply")
+
+    monkeypatch.setattr(bridge, "run_support_agent_for_event", slow_agent)
+    monkeypatch.setattr(bridge, "reply_in_thread", fake_reply)
+    settings = settings_for_tmp(tmp_path, feishu_agent_run_timeout_seconds=0.01)
+    event = FeishuMessageEvent(
+        event_id="evt_1",
+        chat_id="oc_target",
+        chat_type="group",
+        message_id="om_msg",
+        message_type="image",
+        sender_id="ou_sender",
+        content="",
+        mention_names=("飞书 CLI",),
+    )
+
+    assert asyncio.run(bridge.process_message_event(event, settings)) == "replied"
+    assert calls == [
+        ("agent", "om_msg"),
+        ("reply", "om_msg", FEISHU_VISIBLE_REPLY_FALLBACK),
+    ]
+    with sqlite3.connect(settings.feishu_runtime_db_path) as connection:
+        assert connection.execute(
+            "SELECT status, reply_message_id FROM reply_ledger WHERE source_message_id = ?",
+            ("om_msg",),
+        ).fetchone() == ("replied", "om_reply")
+        assert connection.execute(
+            "SELECT stage FROM event_errors WHERE event_key = ?",
+            ("om_msg",),
+        ).fetchone() == ("agent_timeout",)
 
 
 def test_feishu_bridge_logs_hash_identifiers(caplog, tmp_path):

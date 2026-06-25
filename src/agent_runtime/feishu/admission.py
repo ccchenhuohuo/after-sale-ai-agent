@@ -9,6 +9,7 @@ from agent_runtime.settings import Settings
 
 
 MEDIA_MESSAGE_TYPES = {"image", "video", "file", "audio"}
+LISTENABLE_MESSAGE_TYPES = {"text", "post", *MEDIA_MESSAGE_TYPES}
 
 
 @dataclass(frozen=True)
@@ -67,8 +68,8 @@ def should_accept(
 
     if _mentions_bot(event, settings, bot_identity):
         return GateResult(True, "accepted")
-    if _media_auto_accept(event, settings):
-        return GateResult(True, "accepted_media")
+    if _accepts_new_topic(event, settings):
+        return GateResult(True, "accepted_new_topic")
     return GateResult(False, "ignored")
 
 
@@ -107,10 +108,17 @@ def _mentions_bot(event: FeishuMessageEvent, settings: Settings, bot_identity: B
     return should_trigger_ai(event.content, settings.support_agent_trigger_prefix, mention_names)
 
 
-def _media_auto_accept(event: FeishuMessageEvent, settings: Settings) -> bool:
-    if not settings.feishu_media_auto_accept_enabled:
+def _accepts_new_topic(event: FeishuMessageEvent, settings: Settings) -> bool:
+    if settings.feishu_message_admission_mode != "listen_new_topics":
         return False
-    if event.message_type not in MEDIA_MESSAGE_TYPES:
+    if event.message_type not in LISTENABLE_MESSAGE_TYPES:
         return False
-    allowed_chat_ids = split_csv(settings.feishu_support_group_chat_id)
-    return bool(allowed_chat_ids and event.chat_id in allowed_chat_ids)
+    return _is_new_topic_event(event)
+
+
+def _is_new_topic_event(event: FeishuMessageEvent) -> bool:
+    if event.parent_id:
+        return False
+    if event.root_id and event.root_id != event.message_id:
+        return False
+    return True

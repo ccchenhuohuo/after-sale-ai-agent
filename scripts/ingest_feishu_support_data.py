@@ -29,6 +29,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from agent_runtime.copilot.reference_safety import redact_internal_references
+
 BASE_TOKEN = ""
 GROUP_CHAT_ID = ""
 LUZ_CHAT_ID = ""
@@ -195,14 +197,17 @@ def run_json(args: List[str], *, cwd: Path = ROOT) -> Dict[str, Any]:
     if result.returncode != 0:
         raise RuntimeError(
             "Command failed:\n"
-            f"$ {' '.join(args)}\n"
-            f"stdout:\n{result.stdout}\n"
-            f"stderr:\n{result.stderr}"
+            f"$ {_redacted_command(args)}\n"
+            f"stdout:\n{redact_internal_references(result.stdout, max_chars=4000)}\n"
+            f"stderr:\n{redact_internal_references(result.stderr, max_chars=4000)}"
         )
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Expected JSON from {' '.join(args)}, got:\n{result.stdout}") from exc
+        raise RuntimeError(
+            f"Expected JSON from {_redacted_command(args)}, got:\n"
+            f"{redact_internal_references(result.stdout, max_chars=4000)}"
+        ) from exc
 
 
 def run(args: List[str], *, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
@@ -210,11 +215,26 @@ def run(args: List[str], *, cwd: Path = ROOT) -> subprocess.CompletedProcess[str
     if result.returncode != 0:
         raise RuntimeError(
             "Command failed:\n"
-            f"$ {' '.join(args)}\n"
-            f"stdout:\n{result.stdout}\n"
-            f"stderr:\n{result.stderr}"
+            f"$ {_redacted_command(args)}\n"
+            f"stdout:\n{redact_internal_references(result.stdout, max_chars=4000)}\n"
+            f"stderr:\n{redact_internal_references(result.stderr, max_chars=4000)}"
         )
     return result
+
+
+def _redacted_command(args: List[str]) -> str:
+    sensitive_flags = {"--app-secret", "--tenant-access-token", "--user-access-token", "--access-token", "--secret"}
+    redacted_args: list[str] = []
+    redact_next = False
+    for arg in args:
+        if redact_next:
+            redacted_args.append("[redacted-secret]")
+            redact_next = False
+            continue
+        redacted_args.append(redact_internal_references(arg, max_chars=300))
+        if arg in sensitive_flags:
+            redact_next = True
+    return " ".join(redacted_args)
 
 
 def normalize_datetime(value: str) -> str:
@@ -693,8 +713,8 @@ def sync_drive_images(run_dir: Path, folder_token: str = "", folder_name: str = 
             "record_id": job["record_id"],
             "file_key": job["file_key"],
             "local_file": str(job["file_path"].relative_to(ROOT)),
-            "drive_file_token": uploaded_file["file_token"],
-            "drive_file_url": uploaded_file.get("url", ""),
+            "drive_file_token_hash": stable_id("DRIVE", uploaded_file["file_token"]),
+            "drive_file_url_hash": stable_id("URL", uploaded_file.get("url", "")),
         }
 
     worker_count = max(1, parallel)

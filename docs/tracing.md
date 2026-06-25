@@ -4,12 +4,12 @@
 
 https://platform.openai.com/logs?api=traces
 
-也可以将 traces 额外发送到 Tailscale 服务器 Phoenix。Phoenix 需要在广州服务器单独启动，本机继续运行 `chatcopilot`。
+也可以将 traces 额外发送到 ulanzicloud Tailscale 服务器 Phoenix。Phoenix 需要在服务器单独启动，本机继续运行 `VIJIMcopilot`。
 
 Phoenix 地址：
 
 ```text
-http://opencloud.taild79054.ts.net:6006
+http://100.111.223.41:6006
 ```
 
 ## DeepSeek 模型与 Tracing
@@ -32,11 +32,11 @@ OPENAI_PROJECT_ID=proj_xxx
 SUPPORT_AGENT_OPENAI_HOSTED_TRACING_ENABLED=false
 SUPPORT_AGENT_TRACING_DISABLED=false
 SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=true
-SUPPORT_AGENT_TRACE_WORKFLOW_NAME=ulanzi after-sell copilot MVP
+SUPPORT_AGENT_TRACE_WORKFLOW_NAME=VIJIM-after-sale-copilot
 
 PHOENIX_TRACING_ENABLED=true
-PHOENIX_COLLECTOR_ENDPOINT=http://opencloud.taild79054.ts.net:6006/v1/traces
-PHOENIX_PROJECT_NAME=agent-runtime-test
+PHOENIX_COLLECTOR_ENDPOINT=http://100.111.223.41:6006/v1/traces
+PHOENIX_PROJECT_NAME=VIJIM-after-sale-copilot
 ```
 
 运行行为：
@@ -44,7 +44,7 @@ PHOENIX_PROJECT_NAME=agent-runtime-test
 - `LLM_API_KEY` 只用于模型调用。
 - `SUPPORT_AGENT_OPENAI_HOSTED_TRACING_ENABLED=false` 是生产默认配置，避免服务器在 `api.openai.com` 不可达时反复丢弃 hosted trace batch。
 - `OPENAI_TRACING_API_KEY` 只在 `SUPPORT_AGENT_OPENAI_HOSTED_TRACING_ENABLED=true` 时用于向 OpenAI Platform 导出 traces。
-- 当前调试阶段使用 `SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=true`。trace 会记录用户原始输入、附件摘要、归一化问题、Agent prompt、内部结构化答案和最终飞书可见回复，方便在 Phoenix / OpenAI Traces 复盘效果。需要回到最小化链路视图时，将该值改为 `false`；raw vector 仍不写入 trace。
+- 当前开发部署使用 `SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=true`，trace 会记录用户原始输入、附件摘要、Agent prompt、模型 messages、内部结构化答案和最终飞书可见回复，便于在 Phoenix 完整复盘上下文传递。切到生产或共享环境前应改为 `false`；raw vector 和密钥仍不写入 trace。
 - `PHOENIX_TRACING_ENABLED=true` 时，运行时会通过 OpenTelemetry/OpenInference 同步发送 traces 到 Tailscale 服务器 Phoenix；仅应在确认数据边界和访问控制后开启。
 - 终端运行使用 `group_id=terminal-chat`。
 - `/model` 会在 Flash 和 Pro 预设之间切换，影响后续 Agent 轮次。
@@ -72,7 +72,7 @@ PHOENIX_PROJECT_NAME=agent-runtime-test
 - `visible_reply_render`：飞书可见回复渲染和校验。完整 I/O 模式下 `visible_reply.value` 是最终发到飞书 thread 的可见回复副本；Sessions 页不依赖这个子 span。
 - `channel_reply` / `channel_reply_result`：通道回复构建和结果记录。Feishu legacy 记录真实发送结果；OpenClaw channel 记录 `payload_built`，表示已构建 thread reply payload，实际发送由 sidecar 负责。
 
-trace metadata 会包含 `entrypoint`、`loop_version`、`source`、`model_label`、`request_id_hash`、`session_id_hash`、`chat_id_hash`、`thread_id_hash`、`message_id_hash` 和 hash 化 `session.id`。当前调试阶段的 `input.value` / `output.value` 只写在 `support_runtime_turn` span 上；raw vector 永远不写入 trace。
+trace metadata 会包含 `entrypoint`、`loop_version`、`source`、`model_label`、`request_id_hash`、`session_id_hash`、`chat_id_hash`、`thread_id_hash`、`message_id_hash` 和 hash 化 `session.id`。开发透明模式下，`input.value` / `output.value` 会写在 `support_runtime_turn` span 上；`runner_run` 会写 `runner.system_instructions.value` 和 `runner.input.value`；实际送入 chat completions 的完整 message list 在子级 `llm generation` span 的 `input.value` 和 `llm.input_messages.*` 中查看。raw vector 永远不写入 trace。
 
 ## Runtime Trace Span
 
@@ -106,8 +106,8 @@ Admission/debug trace 独立于 Runtime Trace。默认配置下 duplicate / igno
 Phoenix 的 Sessions 页不是自动从 `group_id` 生成的，它依赖 OpenInference 语义字段：
 
 - `session.id`：生产默认使用 hash 化 session ID。飞书会基于 `feishu:{chat_id}:thread:{thread_id}` 得到稳定 hash，OpenClaw 同理，终端基于 `terminal-chat`。
-- `input.value`：当前调试阶段默认记录，只在 `support_runtime_turn` 上表示本轮用户原始消息和安全附件摘要。
-- `output.value`：当前调试阶段默认记录，只在 `support_runtime_turn` 上表示最终可见输出，也就是实际准备发给 Feishu thread、OpenClaw payload 或 Terminal 的文本。
+- `input.value`：在 `SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=true` 时记录，只在 `support_runtime_turn` 上表示本轮用户原始消息和安全附件摘要。
+- `output.value`：在 `SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=true` 时记录，只在 `support_runtime_turn` 上表示最终可见输出，也就是实际准备发给 Feishu thread、OpenClaw payload 或 Terminal 的文本。
 
 因此，同一客服在同一飞书话题里多次追问时，应在 Sessions 页聚合到同一个 hash session；当前调试视图应能直接看到完整业务输入输出。子 span 中的 `runner.input.value`、`internal_answer.value`、`visible_reply.value` 只是调试字段，不作为 Sessions 页 first input / last output 的依据。
 
@@ -130,14 +130,14 @@ Phoenix 的 Sessions 页不是自动从 `group_id` 生成的，它依赖 OpenInf
 ## 查看方式
 
 1. 在广州服务器启动 Phoenix 服务。
-2. 本机运行 `chatcopilot`。
+2. 本机运行 `VIJIMcopilot`。
 3. 输入一个测试问题。
 4. 打开 Phoenix 或 OpenAI Platform traces。
 5. 按 workflow name 或 Phoenix project name 过滤：
 
 ```text
-ulanzi after-sell copilot MVP
-agent-runtime-test
+VIJIM-after-sale-copilot
+VIJIM-after-sale-copilot
 ```
 
 ## 说明

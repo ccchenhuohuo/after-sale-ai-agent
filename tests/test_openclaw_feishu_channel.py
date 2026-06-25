@@ -378,7 +378,6 @@ def test_openclaw_health_reports_channel_without_runtime_configuration(monkeypat
         "channel": "openclaw_feishu",
         "runtime": "support_copilot",
         "requiresSecret": True,
-        "secretConfigured": True,
     }
     assert configured is False
 
@@ -393,7 +392,6 @@ def test_openclaw_health_reports_required_unconfigured_secret_by_default(monkeyp
         "channel": "openclaw_feishu",
         "runtime": "support_copilot",
         "requiresSecret": True,
-        "secretConfigured": False,
     }
 
 

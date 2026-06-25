@@ -1,6 +1,6 @@
-# ulanzi after-sell copilot
+# VIJIM-after-sale-copilot
 
-本仓库是 `ulanzi after-sell copilot` 的运行时，用于在终端和飞书话题群中提供售后客服场景的 AI 辅助分析能力。
+本仓库是 `VIJIM-after-sale-copilot` 的运行时，用于在终端和飞书话题群中提供售后客服场景的 AI 辅助分析能力。
 
 当前测试目标很明确：通过 OpenAI Agents SDK 的售后支持 Agent，验证 SKU 识别、答案格式、安全边界、历史话题 RAG，以及飞书 SDK 长连接接入后的线程内回复稳定性。
 
@@ -8,7 +8,7 @@
 
 ```mermaid
 flowchart TB
-    cli["终端对话<br/>chatcopilot"]
+    cli["终端对话<br/>VIJIMcopilot"]
     feishu["飞书话题群<br/>SDK WebSocket"] --> bridge["Feishu bridge<br/>admission / dedup / queue / reply ledger"]
     openclaw["OpenClaw Lark/Feishu sidecar"] --> openclaw_channel["openclaw_feishu channel<br/>HTTP compatibility endpoint"]
     future_im["未来 IM 平台"] --> channel["Channel Adapter<br/>event/message/assets -> SupportCaseRequest"]
@@ -19,7 +19,7 @@ flowchart TB
     intake --> ingestion["intake / ingestion<br/>OCR / image embedding / VL understanding"]
     ingestion --> context["UnifiedCaseContext<br/>文本 / OCR / 视觉摘要 / vector_id"]
     context --> evidence["support evidence collector<br/>SKU / 正式 KB / 历史 / 媒体"]
-    evidence --> agent["ulanzi after-sell copilot<br/>OpenAI Agents SDK"]
+    evidence --> agent["VIJIM-after-sale-copilot<br/>OpenAI Agents SDK"]
     bridge --> reply["SDK im.v1.message.areply<br/>reply_in_thread"]
     openclaw_channel --> openclaw_reply["OpenClaw thread reply payload"]
     evidence --> sku["SKU 目录<br/>SKU / SPU / 负责人"]
@@ -38,9 +38,8 @@ flowchart TB
 - Core Support Runtime 只消费 `SupportCaseRequest` 并输出 `SupportRuntimeResult`，不 import 飞书 SDK、OpenClaw 或 channel 模块。
 - 新 IM 平台通过独立 `channels/<platform>/adapter.py` / `responder.py` 接入同一个 Core Runtime，不复制 Agent 编排。
 - Legacy 飞书链路只使用官方 Python SDK，不依赖额外命令行桥接工具。
-- 飞书事件只处理白名单话题群内真实用户 @ 机器人后的文本消息。
-- legacy 飞书链路默认不响应纯图片/视频/文件消息；如需在测试群验证图片-only intake，必须同时配置
-  `FEISHU_SUPPORT_GROUP_CHAT_ID` 和 `FEISHU_MEDIA_AUTO_ACCEPT_ENABLED=true`，避免机器人在非白名单群里响应任意媒体消息。
+- 飞书事件默认使用 `FEISHU_MESSAGE_ADMISSION_MODE=mention_only`，只处理白名单话题群内真实用户 @ 机器人或命中触发词的消息。
+- 如需让机器人持续监听并回复新话题首条消息，将 `FEISHU_MESSAGE_ADMISSION_MODE=listen_new_topics`；话题内普通跟帖不会自动触发，后续 @ 机器人仍会读取整条话题上下文后回复。
 - 飞书回复强制使用 `im.v1.message.areply` 的 `reply_in_thread=true`，不会 fallback 到主群新消息。
 - 启动面板展示项目名称、版本、当前模型、计费模式和项目路径。
 - 输入状态只保留上下文数量和当前模型。
@@ -68,7 +67,7 @@ cp .env.example .env
 运行时需要 Python 3.10+。在 `.env` 中填写模型与 tracing 配置后启动终端 Agent：
 
 ```bash
-chatcopilot
+VIJIMcopilot
 ```
 
 启动飞书 SDK 长连接：
@@ -131,7 +130,10 @@ SUPPORT_OCR_PROVIDER=disabled
 SUPPORT_VISUAL_UNDERSTANDING_PROVIDER=bailian_vl
 SUPPORT_VISUAL_UNDERSTANDING_MODEL=qwen-vl-plus
 SUPPORT_AGENT_OPENAI_HOSTED_TRACING_ENABLED=false
+SUPPORT_AGENT_TRACING_DISABLED=false
 SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=true
+PHOENIX_TRACING_ENABLED=true
+PHOENIX_COLLECTOR_ENDPOINT=http://100.111.223.41:6006/v1/traces
 SUPPORT_VECTOR_INDEX_NAMESPACE=after_sales_v1
 SUPPORT_ASSET_ALLOWED_LOCAL_DIRS=
 SUPPORT_ASSET_ALLOWED_URL_HOSTS=
@@ -158,9 +160,15 @@ FEISHU_BOT_MENTION_NAME=飞书 CLI
 FEISHU_RUNTIME_DB_PATH=data/feishu_runtime/runtime.sqlite3
 SUPPORT_AGENT_SESSION_DB_PATH=data/feishu_runtime/agent_sessions.sqlite3
 FEISHU_EVENT_CONCURRENCY=5
+FEISHU_MESSAGE_ADMISSION_MODE=mention_only
+FEISHU_THREAD_CONTEXT_ENABLED=true
+FEISHU_THREAD_CONTEXT_MAX_MESSAGES=80
+FEISHU_THREAD_CONTEXT_MAX_CHARS=12000
+FEISHU_THREAD_CONTEXT_INCLUDE_BOT=false
 FEISHU_BACKFILL_ENABLED=true
 FEISHU_BACKFILL_INTERVAL_SECONDS=10
 FEISHU_BACKFILL_LOOKBACK_SECONDS=180
+FEISHU_AGENT_RUN_TIMEOUT_SECONDS=540
 ```
 
 ## 答案格式
@@ -185,9 +193,9 @@ Agent 内部结构化输出和终端调试输出必须按以下顺序保留字�
 
 ## 上下文
 
-终端运行时使用内存中的 SDK `SQLiteSession`。同一个 `chatcopilot` 进程内的正常对话共享会话，后续问题可以看到前文；重启终端后会开启新的内存会话。
+终端运行时使用内存中的 SDK `SQLiteSession`。同一个 `VIJIMcopilot` 进程内的正常对话共享会话，后续问题可以看到前文；重启终端后会开启新的内存会话。
 
-飞书运行时按 `chat_id + thread_id/root_id/message_id` 隔离 session、队列和 tracing group。同一话题串行处理，不同话题可并行处理。运行时 SQLite 台账位于 `FEISHU_RUNTIME_DB_PATH`，用于记录 dedup、回复状态和错误摘要；Agent 多轮上下文位于 `SUPPORT_AGENT_SESSION_DB_PATH`，同一飞书话题可跨消息共享历史。长连接入口默认启用短周期 backfill，会按 `FEISHU_BACKFILL_LOOKBACK_SECONDS` 回扫测试群最近消息，兜底 Feishu SDK WebSocket 漏推；回扫消息仍走同一 admission、dedup、queue 和 reply ledger。
+飞书运行时按 `chat_id + thread_id/root_id/message_id` 隔离 session、队列和 tracing group。同一话题串行处理，不同话题可并行处理。运行时 SQLite 台账位于 `FEISHU_RUNTIME_DB_PATH`，用于记录 dedup、回复状态和错误摘要；Agent 多轮上下文位于 `SUPPORT_AGENT_SESSION_DB_PATH`，同一飞书话题可跨消息共享历史。进入 Agent 前会按 thread 拉取话题文本上下文，默认排除机器人历史回复，历史图片/文件以占位写入上下文。长连接入口默认启用短周期 backfill，会按 `FEISHU_BACKFILL_LOOKBACK_SECONDS` 回扫配置群最近消息，兜底 Feishu SDK WebSocket 漏推；回扫消息仍走同一 admission、dedup、queue 和 reply ledger。
 
 - `/clear` 会删除所有 session item。
 - `/compact` 会用当前模型压缩会话，清除旧内容，并保留一条摘要。
@@ -201,7 +209,7 @@ Agent 内部结构化输出和终端调试输出必须按以下顺序保留字�
 
 ## 项目地图
 
-- `agent_mvp.py`：`ulanzi after-sell copilot` 的终端对话入口。
+- `agent_mvp.py`：`VIJIM-after-sale-copilot` 的终端对话入口。
 - `src/agent_runtime/copilot/`：Agent prompt、结构化答案 contract、case/context schema、intake router、ingestion pipeline、context assembler、证据包模型和 evidence collector。
 - `src/agent_runtime/feishu/`：飞书 SDK 长连接、入站 gate、SQLite runtime store、per-thread queue 和线程内回复。
 - `src/agent_runtime/tools/sku_catalog.py`：合并 SKU 目录查询。

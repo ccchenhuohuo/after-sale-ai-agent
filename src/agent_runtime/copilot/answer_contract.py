@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from agents import GuardrailFunctionOutput, output_guardrail
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from agent_runtime.copilot.case_context import DataSourceCoverage
 from agent_runtime.copilot.evidence import SupportEvidencePack
@@ -120,6 +120,23 @@ class ContractIssue:
     message: str
 
 
+def _stringify_structured_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return "；".join(_stringify_structured_text(item) for item in value if item is not None)
+    if isinstance(value, dict):
+        parts = []
+        for key, item in value.items():
+            text = _stringify_structured_text(item)
+            if text:
+                parts.append(f"{key}：{text}")
+        return "；".join(parts)
+    return str(value)
+
+
 class SupportAnswer(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -140,11 +157,26 @@ class SupportAnswer(BaseModel):
     missing_data_sources: list[str] = Field(default_factory=list, description="本轮缺失、未接入或未命中的关键数据源。")
     recommended_action: Literal["answer", "ask_clarification", "human_review"] = Field(
         default="ask_clarification",
-        description="建议动作；开发测试阶段 human_review 只提示人工复核，不实际艾特。",
+        description="建议动作；资料不足时使用 human_review 进入人工复核。",
     )
     owner_candidate: str = Field(default="", description="建议负责人候选；没有时留空。")
-    mention_enabled: bool = Field(default=False, description="开发测试阶段固定为 false，不实际 @ 任何人。")
+    mention_enabled: bool = Field(default=False, description="是否需要在飞书回复中 @ 人工复核负责人。")
     ticket_draft: str = Field(description="工单草稿或不建议生成工单的理由。")
+
+    @field_validator(
+        "confidence_reason",
+        "user_issue_summary",
+        "sku_match",
+        "suggested_reply",
+        "official_evidence",
+        "history_reference",
+        "owner_candidate",
+        "ticket_draft",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_text_fields(cls, value: Any) -> str:
+        return _stringify_structured_text(value)
 
 
 def _field_position(text: str, field: str) -> int:
@@ -336,15 +368,15 @@ def render_support_answer(answer: SupportAnswer | object) -> str:
 def apply_data_source_coverage(answer: SupportAnswer | dict, coverage: DataSourceCoverage) -> SupportAnswer:
     answer = _coerce_support_answer(answer)
     used = [item.source_name for item in coverage.items if item.status == "hit"]
-    missing = [item.source_name for item in coverage.items if item.status in {"missing", "not_configured"}]
+    missing = [item.source_name for item in coverage.items if item.status != "hit"]
     return answer.model_copy(
         update={
             "data_sources_used": used,
             "missing_data_sources": missing,
             "history_reference": _coverage_history_reference(answer.history_reference, coverage),
-            "recommended_action": _bounded_recommended_action(answer.recommended_action, coverage.recommended_action),
+            "recommended_action": coverage.recommended_action,
             "owner_candidate": answer.owner_candidate or coverage.owner_candidate,
-            "mention_enabled": False,
+            "mention_enabled": coverage.mention_enabled,
         }
     )
 
@@ -426,13 +458,6 @@ def _coerce_support_answer(answer: SupportAnswer | dict) -> SupportAnswer:
     return SupportAnswer.model_validate(answer)
 
 
-def _bounded_recommended_action(answer_action: str, coverage_action: str) -> str:
-    rank = {"answer": 0, "ask_clarification": 1, "human_review": 2}
-    if rank.get(coverage_action, 0) > rank.get(answer_action, 0):
-        return coverage_action
-    return answer_action
-
-
 def _coverage_history_reference(history_reference: str, coverage: DataSourceCoverage) -> str:
     if not _coverage_has_reviewed_history(coverage):
         return history_reference
@@ -497,7 +522,7 @@ def _recommended_action_line(answer: SupportAnswer) -> str:
     labels = {
         "answer": "可给出保守客服参考",
         "ask_clarification": "先追问补充信息",
-        "human_review": "建议人工复核，不实际艾特负责人",
+        "human_review": "建议人工复核",
     }
     owner = f"；负责人候选：{answer.owner_candidate}" if answer.owner_candidate else ""
     mention = "；mention_enabled=false" if not answer.mention_enabled else "；mention_enabled=true"

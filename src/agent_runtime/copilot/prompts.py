@@ -50,9 +50,9 @@ SUPPORT_COPILOT_INSTRUCTIONS = """
 - history_reference：历史参考；已审核群聊历史 FAQ 可说明“已审核群聊历史 FAQ”；未审核媒体证据必须标注“未审核、需人工确认、不能作为正式依据”
 - data_sources_used：本轮已参考或命中的数据源名称列表
 - missing_data_sources：本轮缺失、未接入或未命中的关键数据源名称列表
-- recommended_action：answer / ask_clarification / human_review
+- recommended_action：answer / ask_clarification / human_review；只有全部必需资料源都高置信命中时用 answer；任一必需资料源缺失、未命中或低置信时都必须用 human_review，并基于已命中资料说明“已参考/未参考”的来源；ask_clarification 仅用于覆盖层已明确允许追问的非人工复核场景
 - owner_candidate：如 SKU 目录可识别负责人，可填候选负责人；否则留空
-- mention_enabled：开发测试阶段固定为 false，不要实际 @ 任何人
+- mention_enabled：当覆盖层 recommended_action 为 human_review 时必须为 true，包括 all-miss 和 partial-hit；只有全部必需资料源高置信命中时才为 false
 - ticket_draft：需要工单时写标题、问题描述、缺失信息、建议负责人、优先级、下一步；不需要时写不建议生成工单及原因
 """
 

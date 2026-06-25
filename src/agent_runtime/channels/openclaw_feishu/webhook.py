@@ -30,7 +30,6 @@ async def openclaw_feishu_health() -> dict[str, Any]:
         "channel": "openclaw_feishu",
         "runtime": "support_copilot",
         "requiresSecret": settings.openclaw_feishu_require_secret or bool(settings.openclaw_feishu_bridge_secret),
-        "secretConfigured": bool(settings.openclaw_feishu_bridge_secret),
     }
 
 

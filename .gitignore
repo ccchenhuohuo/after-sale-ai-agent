@@ -13,10 +13,14 @@ venv/
 
 logs/*.log
 !logs/.gitkeep
+artifacts/
+.codex-backups/
+.deploy-revision
 
 data/feishu_ingest/
 data/feishu_topic_backfill/
 data/feishu_runtime/
+data/reply_ledger.sqlite3
 data/history_rag/
 data/media_rag/
 data/sku_catalog/

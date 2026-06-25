@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from agent_runtime.settings import Settings
+from agent_runtime.tools import formal_kb
 from agent_runtime.tools.formal_kb import formal_kb_index_available, search_formal_kb
 from agent_runtime.tools.rag import search_official_kb_evidence
 
@@ -130,3 +131,37 @@ def test_search_formal_kb_returns_missing_when_index_absent(tmp_path):
 
     assert result.startswith("未查询到可信正式依据")
     assert formal_kb_index_available(settings) is False
+
+
+def test_formal_relevance_filter_rejects_low_score_generic_overlap():
+    result = formal_kb.FormalKbSearchResult(
+        chunk={"chunk_id": "generic", "text": "产品 信息 客户"},
+        similarity_score=0.4,
+        rerank_score=0.55,
+        matched_reasons=["关键词重叠：产品、客户"],
+    )
+
+    filtered = formal_kb._filter_relevant_results(
+        [result],
+        query="未知设备代号 RNDX-8842 错误码 VOID-913",
+        product_model="",
+    )
+
+    assert filtered == []
+
+
+def test_formal_relevance_filter_keeps_product_filtered_match():
+    result = formal_kb.FormalKbSearchResult(
+        chunk={"chunk_id": "l023", "text": "L023 不亮"},
+        similarity_score=0.1,
+        rerank_score=0.2,
+        matched_reasons=["SKU/型号过滤命中"],
+    )
+
+    filtered = formal_kb._filter_relevant_results(
+        [result],
+        query="L023 不亮",
+        product_model="L023",
+    )
+
+    assert filtered == [result]

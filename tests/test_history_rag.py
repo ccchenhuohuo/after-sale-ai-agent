@@ -187,3 +187,37 @@ def test_bailian_rerank_maps_result_index_to_chunk_id(monkeypatch):
     scores = history_rag._bailian_rerank(settings, "查询", chunks)
 
     assert scores == {"b": 0.91, "a": 0.2}
+
+
+def test_history_relevance_filter_rejects_low_score_generic_overlap():
+    result = history_rag.HistorySearchResult(
+        chunk={"chunk_id": "generic", "text": "客户反馈 信息咨询 历史参考"},
+        similarity_score=0.58,
+        rerank_score=0.59,
+        matched_reasons=["关键词重叠：客户、反馈、历史"],
+    )
+
+    filtered = history_rag._filter_relevant_results(
+        [result],
+        query="未知设备代号 RNDX-8842 错误码 VOID-913",
+        product_model="",
+    )
+
+    assert filtered == []
+
+
+def test_history_relevance_filter_keeps_product_filtered_match():
+    result = history_rag.HistorySearchResult(
+        chunk={"chunk_id": "l023", "text": "L023 不亮"},
+        similarity_score=0.1,
+        rerank_score=0.2,
+        matched_reasons=["SKU/型号过滤命中"],
+    )
+
+    filtered = history_rag._filter_relevant_results(
+        [result],
+        query="L023 不亮",
+        product_model="L023",
+    )
+
+    assert filtered == [result]

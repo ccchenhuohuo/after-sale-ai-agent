@@ -57,14 +57,17 @@ def configure_agents_runtime(settings: Settings = None) -> Settings:
     hosted_tracing_enabled = (
         settings.support_agent_openai_hosted_tracing_enabled and not settings.support_agent_tracing_disabled
     )
-    tracing_key = (settings.openai_tracing_api_key or os.getenv("OPENAI_API_KEY", "")) if hosted_tracing_enabled else ""
+    openai_hosted_tracing_enabled = hosted_tracing_enabled and not settings.phoenix_tracing_enabled
+    tracing_key = (
+        settings.openai_tracing_api_key or os.getenv("OPENAI_API_KEY", "")
+    ) if openai_hosted_tracing_enabled else ""
     use_llm_client_for_tracing = (
-        hosted_tracing_enabled
+        openai_hosted_tracing_enabled
         and not tracing_key
         and _is_openai_endpoint(settings.llm_base_url)
     )
 
-    if hosted_tracing_enabled and not tracing_key and not use_llm_client_for_tracing:
+    if openai_hosted_tracing_enabled and not tracing_key and not use_llm_client_for_tracing:
         raise RuntimeError(
             "OPENAI_TRACING_API_KEY is required when OpenAI hosted tracing is enabled with "
             "a non-OpenAI LLM provider. Use your platform.openai.com API key for tracing "
@@ -83,9 +86,9 @@ def configure_agents_runtime(settings: Settings = None) -> Settings:
     if settings.support_agent_use_chat_completions:
         set_default_openai_api("chat_completions")
 
-    if hosted_tracing_enabled and tracing_key:
+    if openai_hosted_tracing_enabled and tracing_key:
         set_tracing_export_api_key(tracing_key)
-    if not hosted_tracing_enabled:
+    if not openai_hosted_tracing_enabled and not settings.phoenix_tracing_enabled:
         set_trace_processors([])
 
     set_tracing_disabled(settings.support_agent_tracing_disabled)
@@ -101,7 +104,7 @@ def build_run_config(
 ) -> RunConfig:
     settings = settings or get_settings()
     trace_metadata = {
-        "app": "ulanzi-after-sell-copilot",
+        "app": "VIJIM-after-sale-copilot",
         "llm_base_url": settings.llm_base_url,
         "llm_model": settings.support_agent_model,
     }

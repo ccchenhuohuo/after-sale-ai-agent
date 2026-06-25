@@ -57,10 +57,18 @@ def test_run_config_uses_current_project_trace_app_name():
 
     config = build_run_config(settings, metadata={"source": "test"})
 
-    assert config.trace_metadata["app"] == "ulanzi-after-sell-copilot"
+    assert config.trace_metadata["app"] == "VIJIM-after-sale-copilot"
     assert config.trace_metadata["llm_model"] == "deepseek-v4-flash"
     assert config.trace_metadata["source"] == "test"
     assert config.trace_include_sensitive_data is True
+
+
+def test_run_config_can_explicitly_minimize_sensitive_trace_data():
+    settings = Settings(support_agent_trace_include_sensitive_data=False)
+
+    config = build_run_config(settings)
+
+    assert config.trace_include_sensitive_data is False
 
 
 def test_configure_agents_runtime_disables_openai_hosted_trace_processors_by_default(monkeypatch):
@@ -79,6 +87,36 @@ def test_configure_agents_runtime_disables_openai_hosted_trace_processors_by_def
         llm_base_url="https://api.deepseek.com",
         support_agent_tracing_disabled=False,
         support_agent_openai_hosted_tracing_enabled=False,
+        phoenix_tracing_enabled=False,
+    )
+
+    configure_agents_runtime(settings)
+
+    assert ("phoenix", False) in calls
+    assert ("client", False) in calls
+    assert ("processors", []) in calls
+    assert ("disabled", False) in calls
+    assert not any(call[0] == "trace_key" for call in calls)
+
+
+def test_configure_agents_runtime_uses_only_phoenix_when_phoenix_is_enabled(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(llm_module, "_CONFIGURED", False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-tracing-key-that-should-be-ignored")
+    monkeypatch.setattr(llm_module, "_configure_phoenix_tracing", lambda settings: calls.append(("phoenix", settings.phoenix_tracing_enabled)))
+    monkeypatch.setattr(llm_module, "set_default_openai_client", lambda client, use_for_tracing=False: calls.append(("client", use_for_tracing)))
+    monkeypatch.setattr(llm_module, "set_default_openai_api", lambda api: calls.append(("api", api)))
+    monkeypatch.setattr(llm_module, "set_trace_processors", lambda processors: calls.append(("processors", processors)))
+    monkeypatch.setattr(llm_module, "set_tracing_export_api_key", lambda key: calls.append(("trace_key", key)))
+    monkeypatch.setattr(llm_module, "set_tracing_disabled", lambda disabled: calls.append(("disabled", disabled)))
+
+    settings = Settings(
+        llm_api_key="provider-key",
+        llm_base_url="https://api.deepseek.com",
+        support_agent_tracing_disabled=False,
+        support_agent_openai_hosted_tracing_enabled=True,
+        openai_tracing_api_key="explicit-openai-tracing-key-that-should-be-ignored",
         phoenix_tracing_enabled=True,
     )
 
@@ -86,8 +124,8 @@ def test_configure_agents_runtime_disables_openai_hosted_trace_processors_by_def
 
     assert ("phoenix", True) in calls
     assert ("client", False) in calls
-    assert ("processors", []) in calls
     assert ("disabled", False) in calls
+    assert not any(call == ("processors", []) for call in calls)
     assert not any(call[0] == "trace_key" for call in calls)
 
 
@@ -100,6 +138,7 @@ def test_configure_agents_runtime_requires_tracing_key_only_when_hosted_tracing_
         llm_base_url="https://api.deepseek.com",
         support_agent_tracing_disabled=False,
         support_agent_openai_hosted_tracing_enabled=True,
+        phoenix_tracing_enabled=False,
         openai_tracing_api_key="",
     )
 
@@ -123,6 +162,7 @@ def test_configure_agents_runtime_configures_hosted_tracing_when_enabled(monkeyp
         llm_base_url="https://api.deepseek.com",
         support_agent_tracing_disabled=False,
         support_agent_openai_hosted_tracing_enabled=True,
+        phoenix_tracing_enabled=False,
         openai_tracing_api_key="trace-key",
     )
 

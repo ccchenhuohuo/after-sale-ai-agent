@@ -252,14 +252,42 @@ def test_support_answer_renders_existing_customer_service_format():
     assert validate_answer_contract(rendered) == []
 
 
+def test_support_answer_coerces_structured_text_fields_from_model_output():
+    answer = SupportAnswer(
+        issue_type="troubleshooting",
+        run_mode="Agent SDK",
+        confidence="中",
+        confidence_reason="SKU 命中但处理口径仍需人工确认。",
+        user_issue_summary="客户反馈 L023 无法开机。",
+        sku_match={"SKU": "L023", "SPU": "40WPRO"},
+        suggested_reply="建议先更换充电器测试，并收集故障视频。",
+        troubleshooting_steps=["更换充电器测试"],
+        follow_up_questions=["指示灯状态？"],
+        official_evidence="未查询到可信正式依据，不可编造。",
+        history_reference=["已审核群聊历史 FAQ：先排查充电器", "未审核媒体观察证据需人工确认"],
+        data_sources_used=["SKU 目录"],
+        missing_data_sources=["正式知识库"],
+        recommended_action="ask_clarification",
+        owner_candidate="陈妍",
+        mention_enabled=False,
+        ticket_draft={"标题": "L023 无法开机", "下一步": ["收集视频", "人工复核"]},
+    )
+
+    assert "SKU：L023" in answer.sku_match
+    assert "SPU：40WPRO" in answer.sku_match
+    assert "已审核群聊历史 FAQ" in answer.history_reference
+    assert "标题：L023 无法开机" in answer.ticket_draft
+    assert "下一步：收集视频；人工复核" in answer.ticket_draft
+
+
 def test_data_source_coverage_caps_model_recommended_action_to_human_review():
     answer = _answer_with_action("answer")
-    coverage = _coverage_with_action("human_review")
+    coverage = _coverage_with_action("human_review").model_copy(update={"mention_enabled": True})
 
     applied = apply_data_source_coverage(answer, coverage)
 
     assert applied.recommended_action == "human_review"
-    assert applied.mention_enabled is False
+    assert applied.mention_enabled is True
 
 
 def test_data_source_coverage_caps_model_recommended_action_to_ask_clarification():
@@ -305,13 +333,14 @@ def test_data_source_coverage_overrides_model_source_lists():
     assert validate_answer_contract(render_support_answer(applied), history_connected=True) == []
 
 
-def test_data_source_coverage_keeps_more_conservative_model_action():
+def test_data_source_coverage_overrides_model_human_review_when_coverage_is_non_hitl():
     answer = _answer_with_action("human_review")
     coverage = _coverage_with_action("answer")
 
     applied = apply_data_source_coverage(answer, coverage)
 
-    assert applied.recommended_action == "human_review"
+    assert applied.recommended_action == "answer"
+    assert applied.mention_enabled is False
 
 
 def test_feishu_visible_reply_renders_natural_text_without_internal_format():
@@ -397,6 +426,90 @@ def test_visible_runtime_reply_falls_back_when_rendered_text_contains_internal_r
     assert reply.blocked is True
     assert reply.safe_text == FEISHU_VISIBLE_REPLY_FALLBACK
     assert any(issue.code == "visible_reference_leak" for issue in reply.issues)
+
+
+def test_visible_runtime_reply_uses_fallback_only_when_no_sources_hit():
+    answer = _answer_with_action("human_review")
+    result = SimpleNamespace(
+        contract_issues=[],
+        answer=answer,
+        coverage=DataSourceCoverage(
+            items=[
+                DataSourceCoverageItem(
+                    source_id="sku_catalog",
+                    source_name="SKU 目录",
+                    status="miss",
+                    authority="identity_only",
+                ),
+                DataSourceCoverageItem(
+                    source_id="official_kb",
+                    source_name="正式知识库",
+                    status="missing",
+                    authority="missing",
+                ),
+                DataSourceCoverageItem(
+                    source_id="history_faq",
+                    source_name="群聊历史 FAQ",
+                    status="miss",
+                    authority="reviewed",
+                ),
+            ],
+            recommended_action="human_review",
+            mention_enabled=True,
+        ),
+    )
+
+    reply = render_feishu_visible_runtime_reply(result)
+
+    assert reply.text == FEISHU_VISIBLE_REPLY_FALLBACK
+    assert reply.safe_text == FEISHU_VISIBLE_REPLY_FALLBACK
+    assert reply.issues == []
+
+
+def test_visible_runtime_reply_does_not_fallback_when_any_source_hits():
+    answer = _answer_with_action("human_review").model_copy(
+        update={
+            "sku_match": "SKU 命中 L023，仅用于产品识别。",
+            "suggested_reply": "建议先确认充电器、线材和指示灯状态，再补充视频交人工复核。",
+        }
+    )
+    coverage = DataSourceCoverage(
+        items=[
+            DataSourceCoverageItem(
+                source_id="sku_catalog",
+                source_name="SKU 目录",
+                status="hit",
+                authority="identity_only",
+                hit_count=1,
+                confidence="高",
+            ),
+            DataSourceCoverageItem(
+                source_id="official_kb",
+                source_name="正式知识库",
+                status="missing",
+                authority="missing",
+            ),
+            DataSourceCoverageItem(
+                source_id="history_faq",
+                source_name="群聊历史 FAQ",
+                status="miss",
+                authority="reviewed",
+            ),
+        ],
+        recommended_action="answer",
+        mention_enabled=False,
+    )
+    result = SimpleNamespace(
+        contract_issues=[],
+        answer=apply_data_source_coverage(answer, coverage),
+        coverage=coverage,
+    )
+
+    reply = render_feishu_visible_runtime_reply(result)
+
+    assert reply.safe_text != FEISHU_VISIBLE_REPLY_FALLBACK
+    assert "这次主要参考了SKU 目录" in reply.safe_text
+    assert "暂缺正式知识库" in reply.safe_text
 
 
 def test_feishu_visible_reply_validation_blocks_time_commitment():

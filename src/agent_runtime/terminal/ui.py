@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
-APP_NAME = "ulanzi after-sell copilot"
+APP_NAME = "VIJIM-after-sale-copilot"
 ANSI = sys.stdout.isatty() and not os.getenv("NO_COLOR")
 
 

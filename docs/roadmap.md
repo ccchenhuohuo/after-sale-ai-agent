@@ -10,7 +10,7 @@
 
 当前状态：
 
-- Agents SDK 终端运行时已可通过 `chatcopilot` 启动。
+- Agents SDK 终端运行时已可通过 `VIJIMcopilot` 启动。
 - 合并后的 SKU 支持目录已生成在 `data/sku_catalog/processed/<date>/`。
 - Web Demo、HTTP API、webhook 运行时和本地确定性分析器已从当前测试阶段移除。
 - 阶段 0 剩余阻塞项是：经过审核的正式知识库、经过审核的历史案例卡片、已标注评测问题，以及生产级源数据导出。
@@ -20,7 +20,7 @@
 目标：
 
 ```text
-启动终端 -> 输入客服问题 -> ulanzi after-sell copilot 返回结构化参考答案。
+启动终端 -> 输入客服问题 -> VIJIM-after-sale-copilot 返回结构化参考答案。
 ```
 
 交付物：
@@ -35,7 +35,7 @@
 
 交付物：
 
-- `ulanzi after-sell copilot` Agent。
+- `VIJIM-after-sale-copilot` Agent。
 - Prompt 和输出格式。
 - 基础日志。
 

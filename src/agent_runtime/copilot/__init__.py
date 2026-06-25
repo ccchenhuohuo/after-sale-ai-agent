@@ -1,1 +1,1 @@
-"""ulanzi after-sell copilot Agent 包。"""
+"""VIJIM-after-sale-copilot Agent 包。"""

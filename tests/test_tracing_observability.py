@@ -179,11 +179,45 @@ def test_core_runtime_namespaces_internal_io_fields():
     assert '"support_core_runtime"' in source
     assert '"support_runtime_turn"' not in source
     assert '"runner.input.value"' in source
+    assert '"runner.system_instructions.value"' in source
     assert '"retrieval.input.value"' in source
     assert '"context.input.value"' in source
     assert '"internal_answer.value"' in source
     assert '"input.value": agent_input' not in source
     assert '"output.value": internal_text' not in source
+
+
+def test_runner_prompt_trace_attrs_expose_full_prompt_in_development_mode():
+    attrs = support_runtime._runner_prompt_trace_attrs(
+        Settings(support_agent_trace_include_sensitive_data=True),
+        "组装后的 Agent prompt",
+    )
+
+    assert attrs["runner.input.value"] == "组装后的 Agent prompt"
+    assert attrs["agent_input"] == "组装后的 Agent prompt"
+    assert "你是飞书客服群里的 AI 客服参考助手" in attrs["runner.system_instructions.value"]
+
+    assert support_runtime._runner_prompt_trace_attrs(
+        Settings(support_agent_trace_include_sensitive_data=False),
+        "组装后的 Agent prompt",
+    ) == {}
+
+
+def test_llm_message_trace_attrs_use_openinference_message_keys():
+    attrs = support_runtime._llm_messages_trace_attrs(
+        input_messages=[
+            {"role": "system", "content": "系统指令"},
+            {"role": "user", "content": "用户 prompt"},
+        ],
+        output_messages=[{"role": "assistant", "content": "模型输出"}],
+    )
+
+    assert attrs["llm.input_messages.0.message.role"] == "system"
+    assert attrs["llm.input_messages.0.message.content"] == "系统指令"
+    assert attrs["llm.input_messages.1.message.role"] == "user"
+    assert attrs["llm.input_messages.1.message.content"] == "用户 prompt"
+    assert attrs["llm.output_messages.0.message.role"] == "assistant"
+    assert attrs["llm.output_messages.0.message.content"] == "模型输出"
 
 
 def test_span_if_tracing_without_active_trace_does_not_create_span(monkeypatch):
@@ -250,7 +284,9 @@ def test_runtime_trace_creates_turn_span_and_updates_output(monkeypatch):
         "input.value": "客户原始问题",
         "user.input": "客户原始问题",
     }
-    with obs_tracing.runtime_trace(Settings(), entrypoint="feishu", group_id="group", attrs=attrs) as turn:
+    settings = Settings(support_agent_trace_include_sensitive_data=False)
+
+    with obs_tracing.runtime_trace(settings, entrypoint="feishu", group_id="group", attrs=attrs) as turn:
         assert turn.active
         turn.set_output("最终可见回复", output_kind="feishu_visible_reply", status="replied")
 
@@ -265,15 +301,44 @@ def test_runtime_trace_creates_turn_span_and_updates_output(monkeypatch):
                 "trace_kind": "runtime",
                 "entrypoint": "feishu",
                 "session.id": "session-hash",
-                "input.value": "客户原始问题",
-                "user.input": "客户原始问题",
                 "output.kind": "feishu_visible_reply",
                 "output.status": "replied",
                 "output_chars": len("最终可见回复"),
-                "output.value": "最终可见回复",
             },
         )
     ]
+
+
+def test_runtime_trace_includes_turn_io_only_when_explicitly_enabled(monkeypatch):
+    trace_calls = []
+    spans = []
+
+    def fake_trace(*args, **kwargs):
+        trace_calls.append((args, kwargs))
+        return FakeSpan("runtime_trace")
+
+    monkeypatch.setattr(obs_tracing, "get_current_trace", lambda: None)
+    monkeypatch.setattr(obs_tracing, "trace", fake_trace)
+    monkeypatch.setattr(obs_tracing, "custom_span", lambda name, attrs=None: FakeSpan(name, attrs, spans))
+
+    attrs = {
+        "trace_kind": "runtime",
+        "entrypoint": "feishu",
+        "session.id": "session-hash",
+        "input.value": "客户原始问题",
+        "user.input": "客户原始问题",
+    }
+    settings = Settings(support_agent_trace_include_sensitive_data=True)
+
+    with obs_tracing.runtime_trace(settings, entrypoint="feishu", group_id="group", attrs=attrs) as turn:
+        assert turn.active
+        turn.set_output("最终可见回复", output_kind="feishu_visible_reply", status="replied")
+
+    assert "input.value" not in trace_calls[0][1]["metadata"]
+    assert "user.input" not in trace_calls[0][1]["metadata"]
+    assert spans[0][1]["input.value"] == "客户原始问题"
+    assert spans[0][1]["user.input"] == "客户原始问题"
+    assert spans[0][1]["output.value"] == "最终可见回复"
 
 
 def test_accepted_feishu_runtime_trace_contains_reply_render_and_reply_spans(monkeypatch, tmp_path):
@@ -310,7 +375,7 @@ def test_accepted_feishu_runtime_trace_contains_reply_render_and_reply_spans(mon
     monkeypatch.setattr(obs_tracing, "custom_span", lambda name, attrs=None: FakeSpan(name, attrs, spans))
     monkeypatch.setattr(bridge, "flush_traces", lambda: flushes.append("flush"))
 
-    settings = settings_for_tmp(tmp_path)
+    settings = settings_for_tmp(tmp_path, support_agent_trace_include_sensitive_data=False)
 
     assert asyncio.run(bridge.process_message_event(feishu_event(), settings)) == "replied"
 
@@ -328,9 +393,9 @@ def test_accepted_feishu_runtime_trace_contains_reply_render_and_reply_spans(mon
     assert "message_id" not in runtime_traces[0]
     assert "input.value" not in runtime_traces[0]
     assert "user.input" not in runtime_traces[0]
-    assert turn_spans[0]["input.value"] == "@飞书 CLI L023 不亮"
-    assert turn_spans[0]["user.input"] == "@飞书 CLI L023 不亮"
-    assert turn_spans[0]["output.value"]
+    assert "input.value" not in turn_spans[0]
+    assert "user.input" not in turn_spans[0]
+    assert "output.value" not in turn_spans[0]
     assert turn_spans[0]["output.kind"] == "feishu_visible_reply"
     assert turn_spans[0]["output.status"] == "replied"
     span_names = [name for name, _ in spans]
@@ -339,9 +404,8 @@ def test_accepted_feishu_runtime_trace_contains_reply_render_and_reply_spans(mon
     assert "channel_reply_result" in span_names
     visible_reply_span = dict(spans)["visible_reply_render"]
     assert "output.value" not in visible_reply_span
-    assert visible_reply_span["visible_reply.value"]
-    assert visible_reply_span["visible_reply"] == visible_reply_span["visible_reply.value"]
-    assert turn_spans[0]["output.value"] == visible_reply_span["visible_reply.value"]
+    assert "visible_reply.value" not in visible_reply_span
+    assert "visible_reply" not in visible_reply_span
     assert flushes == ["flush"]
 
 
@@ -364,13 +428,17 @@ def test_openclaw_support_case_uses_one_runtime_trace_for_runtime_and_reply(monk
             answer=_support_answer(),
             request=request,
             coverage=SimpleNamespace(recommended_action="answer", mention_enabled=False),
-            trace_include_full_io=True,
+            trace_include_full_io=settings.support_agent_trace_include_sensitive_data,
         )
 
     monkeypatch.setattr(
         openclaw_webhook,
         "get_settings",
-        lambda: Settings(llm_api_key="test-key", openclaw_feishu_bridge_secret="secret"),
+        lambda: Settings(
+            llm_api_key="test-key",
+            openclaw_feishu_bridge_secret="secret",
+            support_agent_trace_include_sensitive_data=False,
+        ),
     )
     monkeypatch.setattr(openclaw_webhook, "configure_agents_runtime", lambda settings: settings)
     monkeypatch.setattr(openclaw_webhook, "build_support_runtime_session", lambda settings, session_id: "session")
@@ -413,16 +481,16 @@ def test_openclaw_support_case_uses_one_runtime_trace_for_runtime_and_reply(monk
     assert "message_id" not in runtime_traces[0]
     assert "input.value" not in runtime_traces[0]
     assert "user.input" not in runtime_traces[0]
-    assert turn_spans[0]["input.value"] == "客户反馈 L023 不亮"
-    assert turn_spans[0]["user.input"] == "客户反馈 L023 不亮"
-    assert turn_spans[0]["output.value"] == reply["text"]
+    assert "input.value" not in turn_spans[0]
+    assert "user.input" not in turn_spans[0]
+    assert "output.value" not in turn_spans[0]
     assert turn_spans[0]["output.kind"] == "openclaw_thread_reply_payload"
     assert turn_spans[0]["output.status"] == "payload_built"
     assert {name for name, _ in spans} >= {"visible_reply_render", "channel_reply", "channel_reply_result"}
     visible_reply_span = dict(spans)["visible_reply_render"]
     assert "output.value" not in visible_reply_span
-    assert visible_reply_span["visible_reply.value"]
-    assert visible_reply_span["visible_reply"] == visible_reply_span["visible_reply.value"]
+    assert "visible_reply.value" not in visible_reply_span
+    assert "visible_reply" not in visible_reply_span
     assert visible_reply_span["output_chars"] > 0
     reply_result_span = dict(spans)["channel_reply_result"]
     assert reply_result_span["reply_status"] == "payload_built"
@@ -489,15 +557,22 @@ def test_terminal_turn_records_turn_level_input_and_output(monkeypatch, capsys):
     monkeypatch.setattr(terminal_runtime, "run_support_case_request", fake_run_support_case_request)
     monkeypatch.setattr(terminal_runtime, "flush_traces", lambda: flushes.append("flush"))
 
-    asyncio.run(terminal_runtime.run_turn(object(), Settings(), object(), "L023 不亮"))
+    asyncio.run(
+        terminal_runtime.run_turn(
+            object(),
+            Settings(support_agent_trace_include_sensitive_data=False),
+            object(),
+            "L023 不亮",
+        )
+    )
 
     assert len(runtime_traces) == 1
     assert runtime_traces[0]["entrypoint"] == "terminal"
     assert "input.value" not in runtime_traces[0]
     assert len(turn_spans) == 1
-    assert turn_spans[0]["input.value"] == "L023 不亮"
-    assert turn_spans[0]["user.input"] == "L023 不亮"
-    assert turn_spans[0]["output.value"] == "终端最终输出"
+    assert "input.value" not in turn_spans[0]
+    assert "user.input" not in turn_spans[0]
+    assert "output.value" not in turn_spans[0]
     assert turn_spans[0]["output.kind"] == "terminal_internal_answer"
     assert turn_spans[0]["output.status"] == "ready"
     assert flushes == ["flush"]

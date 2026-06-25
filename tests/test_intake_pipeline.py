@@ -668,15 +668,20 @@ def test_data_source_coverage_lists_hits_missing_sources_and_human_review_window
     coverage = build_data_source_coverage(context, pack)
 
     assert coverage.recommended_action == "human_review"
-    assert coverage.mention_enabled is False
+    assert coverage.mention_enabled is True
     assert "正式知识库" in [item.source_name for item in coverage.items if item.status == "missing"]
     assert "产品 MRD/手册" in [item.source_name for item in coverage.items if item.status == "missing"]
 
 
-def test_media_only_coverage_requires_human_review():
+def test_media_only_coverage_requires_human_review_mention():
     context = asyncio.run(
         build_support_case_context(
-            SupportCaseRequest(request_id="case_media_only", source="terminal", user_text="L023 外壳疑似损坏"),
+            SupportCaseRequest(
+                request_id="case_media_only",
+                source="terminal",
+                user_text="L023 外壳疑似损坏",
+                assets=[SupportAsset(asset_id="img_damage", media_type="image", filename="damage.jpg")],
+            ),
             Settings(),
         )
     ).context
@@ -707,4 +712,200 @@ def test_media_only_coverage_requires_human_review():
     coverage = build_data_source_coverage(context, pack)
 
     assert coverage.recommended_action == "human_review"
+    assert coverage.mention_enabled is True
+    assert "媒体观察证据" in [item.source_name for item in coverage.items if item.status == "hit"]
+
+
+def test_sku_only_coverage_requires_human_review_mention():
+    context = asyncio.run(
+        build_support_case_context(
+            SupportCaseRequest(request_id="case_sku_only", source="terminal", user_text="L023 不亮"),
+            Settings(),
+        )
+    ).context
+    pack = SupportEvidencePack(
+        raw_issue_hash="hash",
+        query_chars=8,
+        issue_type="troubleshooting",
+        product_model="L023",
+        sku=[
+            SkuEvidence(
+                status="hit",
+                evidence_level="identity_only",
+                verified=True,
+                query_hash="hash",
+                sku="L023",
+                score=1.0,
+            )
+        ],
+        official=[
+            OfficialKbEvidence(status="empty", evidence_level="empty", verified=False, query_hash="hash"),
+        ],
+        history=[
+            HistoryEvidence(status="empty", evidence_level="empty", verified=False, query_hash="hash"),
+        ],
+        media=[
+            MediaEvidence(status="empty", evidence_level="empty", verified=False, query_hash="hash"),
+        ],
+    )
+
+    coverage = build_data_source_coverage(context, pack)
+
+    assert coverage.recommended_action == "human_review"
+    assert coverage.mention_enabled is True
+    assert [item.source_name for item in coverage.items if item.status == "hit"] == ["SKU 目录"]
+
+
+def test_history_only_coverage_requires_human_review_mention():
+    context = asyncio.run(
+        build_support_case_context(
+            SupportCaseRequest(request_id="case_history_only", source="terminal", user_text="L023 不亮"),
+            Settings(),
+        )
+    ).context
+    pack = SupportEvidencePack(
+        raw_issue_hash="hash",
+        query_chars=8,
+        issue_type="troubleshooting",
+        product_model="L023",
+        sku=[],
+        official=[
+            OfficialKbEvidence(status="empty", evidence_level="empty", verified=False, query_hash="hash"),
+        ],
+        history=[
+            HistoryEvidence(
+                status="hit",
+                evidence_level="reviewed_case",
+                verified=True,
+                query_hash="hash",
+                score=0.91,
+                summary="已审核群聊历史 FAQ：L023 不亮先排查充电线和按键状态。",
+            )
+        ],
+        media=[
+            MediaEvidence(status="empty", evidence_level="empty", verified=False, query_hash="hash"),
+        ],
+    )
+
+    coverage = build_data_source_coverage(context, pack)
+
+    assert coverage.recommended_action == "human_review"
+    assert coverage.mention_enabled is True
+    assert [item.source_name for item in coverage.items if item.status == "hit"] == ["群聊历史 FAQ"]
+    assert "正式知识库" in [item.source_name for item in coverage.items if item.status != "hit"]
+
+
+def test_partial_hit_with_missing_information_requires_human_review_mention():
+    context = asyncio.run(
+        build_support_case_context(
+            SupportCaseRequest(
+                request_id="case_sku_with_missing_media_context",
+                source="terminal",
+                user_text="L023 不亮",
+                assets=[SupportAsset(asset_id="img_unknown", media_type="image", filename="unknown.jpg")],
+            ),
+            Settings(),
+        )
+    ).context
+    pack = SupportEvidencePack(
+        raw_issue_hash="hash",
+        query_chars=8,
+        issue_type="troubleshooting",
+        product_model="L023",
+        sku=[
+            SkuEvidence(
+                status="hit",
+                evidence_level="identity_only",
+                verified=True,
+                query_hash="hash",
+                sku="L023",
+                score=1.0,
+            )
+        ],
+        official=[
+            OfficialKbEvidence(status="empty", evidence_level="empty", verified=False, query_hash="hash"),
+        ],
+        history=[
+            HistoryEvidence(status="empty", evidence_level="empty", verified=False, query_hash="hash"),
+        ],
+        media=[
+            MediaEvidence(status="empty", evidence_level="empty", verified=False, query_hash="hash"),
+        ],
+    )
+
+    coverage = build_data_source_coverage(context, pack)
+
+    assert context.missing_information
+    assert coverage.recommended_action == "human_review"
+    assert coverage.mention_enabled is True
+    assert [item.source_name for item in coverage.items if item.status == "hit"] == ["SKU 目录"]
+
+
+def test_all_high_confidence_sources_disable_human_review_window():
+    context = asyncio.run(
+        build_support_case_context(
+            SupportCaseRequest(request_id="case_all_sources", source="terminal", user_text="L023 不亮"),
+            Settings(),
+        )
+    ).context
+    pack = SupportEvidencePack(
+        raw_issue_hash="hash",
+        query_chars=8,
+        issue_type="troubleshooting",
+        product_model="L023",
+        sku=[
+            SkuEvidence(
+                status="hit",
+                evidence_level="identity_only",
+                verified=True,
+                query_hash="hash",
+                sku="L023",
+                score=1.0,
+            )
+        ],
+        official=[
+            OfficialKbEvidence(
+                status="hit",
+                evidence_level="formal",
+                verified=True,
+                query_hash="hash",
+                title="L023 SOP",
+                source_type="official_kb",
+                score=0.98,
+            ),
+            OfficialKbEvidence(
+                status="hit",
+                evidence_level="formal",
+                verified=True,
+                query_hash="hash",
+                title="L023 Manual",
+                source_type="manual",
+                score=0.97,
+            ),
+        ],
+        history=[
+            HistoryEvidence(
+                status="hit",
+                evidence_level="reviewed_case",
+                verified=True,
+                query_hash="hash",
+                score=0.96,
+            )
+        ],
+        media=[
+            MediaEvidence(
+                status="hit",
+                evidence_level="unreviewed_media",
+                verified=False,
+                query_hash="hash",
+                score=0.95,
+            )
+        ],
+    )
+
+    coverage = build_data_source_coverage(context, pack)
+
+    assert coverage.recommended_action == "answer"
     assert coverage.mention_enabled is False
+    assert all(item.status == "hit" and item.confidence == "高" for item in coverage.items)
+    assert "媒体观察证据" not in [item.source_name for item in coverage.items]

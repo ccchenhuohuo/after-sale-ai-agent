@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 
+from agent_runtime.copilot.reference_safety import redact_internal_references
 from agent_runtime.feishu.events import FeishuMessageEvent, effective_thread_id, queue_key_for_event
 
 
@@ -21,10 +22,17 @@ class EventClaim:
 
 
 class RuntimeStore:
-    def __init__(self, db_path: str, ttl_seconds: int, max_items: int) -> None:
+    def __init__(
+        self,
+        db_path: str,
+        ttl_seconds: int,
+        max_items: int,
+        processing_stale_seconds: int = 600,
+    ) -> None:
         self.db_path = Path(db_path)
         self.ttl_seconds = max(0, ttl_seconds)
         self.max_items = max(1, max_items)
+        self.processing_stale_seconds = max(0, processing_stale_seconds)
         self._lock = Lock()
         self._ensure_schema()
 
@@ -36,17 +44,24 @@ class RuntimeStore:
         with self._lock, self._connect() as connection:
             self._prune(connection, now)
             row = connection.execute(
-                "SELECT status FROM seen_events WHERE event_key = ?",
+                "SELECT status, updated_at FROM seen_events WHERE event_key = ?",
                 (event_key,),
             ).fetchone()
             if row is not None:
                 previous_status = str(row[0] or "")
+                updated_at = float(row[1] or 0)
                 if previous_status in {"agent_failed", "reply_failed"}:
                     connection.execute(
                         "UPDATE seen_events SET status = ?, updated_at = ? WHERE event_key = ?",
                         ("processing", now, event_key),
                     )
                     return EventClaim(status=f"retry_{previous_status}", should_process=True)
+                if previous_status == "processing" and self._is_stale_processing(updated_at, now):
+                    connection.execute(
+                        "UPDATE seen_events SET status = ?, updated_at = ? WHERE event_key = ?",
+                        ("processing", now, event_key),
+                    )
+                    return EventClaim(status="retry_processing_stale", should_process=True)
                 return EventClaim(status="duplicate", should_process=False)
 
             connection.execute(
@@ -68,6 +83,13 @@ class RuntimeStore:
             )
             self._trim(connection)
             return EventClaim(status="processing", should_process=True)
+
+    def _is_stale_processing(self, updated_at: float, now: float) -> bool:
+        if self.processing_stale_seconds <= 0:
+            return False
+        if updated_at <= 0:
+            return True
+        return now - updated_at >= self.processing_stale_seconds
 
     def try_record_event(self, event: FeishuMessageEvent) -> bool:
         return self.claim_event(event).should_process
@@ -108,7 +130,7 @@ class RuntimeStore:
                     _hash(effective_thread_id(event)),
                     reply_message_id,
                     status,
-                    error[:1000],
+                    redact_internal_references(error, max_chars=1000),
                     now,
                 ),
             )
@@ -129,7 +151,7 @@ class RuntimeStore:
                     _hash(event.chat_id),
                     _hash(effective_thread_id(event)),
                     _hash(event.message_id),
-                    error[:1000],
+                    redact_internal_references(error, max_chars=1000),
                     now,
                 ),
             )

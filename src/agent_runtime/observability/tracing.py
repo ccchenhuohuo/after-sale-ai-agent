@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from contextlib import contextmanager
 from typing import Any
 
 from agents import custom_span, trace
 from agents.tracing import get_current_trace
+from opentelemetry import trace as otel_trace
 
 from agent_runtime.settings import Settings
 
@@ -90,6 +92,23 @@ def safe_trace_value(value: object) -> object:
     return str(value)
 
 
+def set_current_otel_attrs(attrs: dict[str, object]) -> None:
+    if not attrs:
+        return
+    try:
+        current_span = otel_trace.get_current_span()
+        for key, value in safe_trace_attrs(attrs).items():
+            current_span.set_attribute(key, _otel_attr_value(value))
+    except Exception:
+        pass
+
+
+def _otel_attr_value(value: object) -> str | int | float | bool:
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
 def trace_metadata_attrs(attrs: dict[str, object]) -> dict[str, object]:
     return {key: value for key, value in safe_trace_attrs(attrs).items() if key not in TURN_ONLY_TRACE_ATTRS}
 
@@ -106,7 +125,9 @@ class RuntimeTurnHandle:
     def update(self, attrs: dict[str, object]) -> None:
         if self._span is None:
             return
-        self._span.span_data.data.update(safe_trace_attrs(attrs))
+        safe_attrs = safe_trace_attrs(attrs)
+        self._span.span_data.data.update(safe_attrs)
+        set_current_otel_attrs(safe_attrs)
 
     def set_output(self, text: str, *, output_kind: str, status: str) -> None:
         attrs: dict[str, object] = {
@@ -234,11 +255,15 @@ def runtime_trace(settings: Settings, *, entrypoint: str, group_id: str, attrs: 
         metadata=trace_metadata_attrs(attrs),
         disabled=settings.support_agent_tracing_disabled,
     ):
+        turn_safe_attrs = safe_trace_attrs(attrs)
+        if not settings.support_agent_trace_include_sensitive_data:
+            turn_safe_attrs = {key: value for key, value in turn_safe_attrs.items() if key not in TURN_ONLY_TRACE_ATTRS}
         turn_attrs = {
             "span.kind": "runtime_turn",
-            **safe_trace_attrs(attrs),
+            **turn_safe_attrs,
         }
         with custom_span("support_runtime_turn", turn_attrs) as turn_span:
+            set_current_otel_attrs(turn_attrs)
             yield RuntimeTurnHandle(
                 turn_span,
                 include_full_io=settings.support_agent_trace_include_sensitive_data,
@@ -247,7 +272,9 @@ def runtime_trace(settings: Settings, *, entrypoint: str, group_id: str, attrs: 
 
 @contextmanager
 def span(name: str, attrs: dict[str, object] | None = None):
-    with custom_span(name, safe_trace_attrs(attrs or {})):
+    safe_attrs = safe_trace_attrs(attrs or {})
+    with custom_span(name, safe_attrs):
+        set_current_otel_attrs(safe_attrs)
         yield
 
 
@@ -256,7 +283,9 @@ def span_if_tracing(name: str, attrs: dict[str, object] | None = None):
     if get_current_trace() is None:
         yield None
         return
-    with custom_span(name, safe_trace_attrs(attrs or {})) as active_span:
+    safe_attrs = safe_trace_attrs(attrs or {})
+    with custom_span(name, safe_attrs) as active_span:
+        set_current_otel_attrs(safe_attrs)
         yield active_span
 
 

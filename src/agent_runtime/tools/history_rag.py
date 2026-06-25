@@ -17,6 +17,7 @@ from agent_runtime.settings import Settings, get_settings
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DIMENSION = 768
 REMOTE_TEXT_MAX_CHARS = 300
+MIN_RELEVANT_RERANK_SCORE = 0.65
 SKU_RE = re.compile(r"\b[A-Z]{1,4}\d{2,5}[A-Z0-9-]*\b")
 
 
@@ -356,7 +357,10 @@ def search_history_rag(
                 )
             )
         results.sort(key=lambda result: result.rerank_score, reverse=True)
-        results = results[:top_n]
+        results = _filter_relevant_results(results, query=query, product_model=product_model)[:top_n]
+
+    if not results:
+        return "未查询到可信历史参考：没有命中足够相关的相似话题。"
 
     with custom_span(
         "history_result_pack",
@@ -374,3 +378,21 @@ def search_history_rag(
                 *[_format_result(result) for result in results],
             ]
         )
+
+
+def _filter_relevant_results(
+    results: list[HistorySearchResult],
+    *,
+    query: str,
+    product_model: str | None,
+) -> list[HistorySearchResult]:
+    return [result for result in results if _is_relevant_result(result, query=query, product_model=product_model)]
+
+
+def _is_relevant_result(result: HistorySearchResult, *, query: str, product_model: str | None) -> bool:
+    reasons = "；".join(result.matched_reasons)
+    if product_model and "SKU/型号过滤命中" in reasons:
+        return True
+    if SKU_RE.findall(query.upper()) and "查询SKU命中" in reasons:
+        return True
+    return result.rerank_score >= MIN_RELEVANT_RERANK_SCORE

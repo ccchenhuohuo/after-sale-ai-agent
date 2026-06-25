@@ -148,7 +148,7 @@ def build_data_source_coverage(
             "hit" if evidence_pack.sku_hit_count else "miss",
             "identity_only",
             evidence_pack.sku_hit_count,
-            "高" if evidence_pack.sku_hit_count else "低",
+            _source_confidence(evidence_pack.sku, hit_confidence="高"),
             "用于产品识别和负责人候选，不能单独作为故障或政策依据。",
         ),
         _coverage_item(
@@ -157,7 +157,11 @@ def build_data_source_coverage(
             "hit" if formal_kb_hit_count else "missing",
             "formal" if formal_kb_hit_count else "missing",
             formal_kb_hit_count,
-            "高" if formal_kb_hit_count else "未知",
+            _source_confidence(
+                [item for item in evidence_pack.official if item.source_type in {"official_kb", "policy"}],
+                hit_confidence="高",
+                missing_confidence="未知",
+            ),
             "正式知识库/政策源尚未接入或未命中。" if not formal_kb_hit_count else "已命中正式知识库/政策依据。",
         ),
         _coverage_item(
@@ -166,17 +170,8 @@ def build_data_source_coverage(
             "hit" if evidence_pack.history_hit_count else "miss",
             "reviewed" if evidence_pack.history_hit_count else "reviewed",
             evidence_pack.history_hit_count,
-            "高" if evidence_pack.history_hit_count else "低",
+            _source_confidence(evidence_pack.history, hit_confidence="高"),
             "已审核群聊历史 FAQ；可作为可靠售后参考，但不是正式政策源。",
-        ),
-        _coverage_item(
-            "media_evidence",
-            "媒体观察证据",
-            "hit" if evidence_pack.media_hit_count else "miss",
-            "media_observation",
-            evidence_pack.media_hit_count,
-            "中" if evidence_pack.media_hit_count else "低",
-            "媒体证据只能作为视觉线索，不能单独作为正式结论。",
         ),
         _coverage_item(
             "product_mrd",
@@ -184,16 +179,33 @@ def build_data_source_coverage(
             "hit" if product_doc_hit_count else "missing",
             "formal" if product_doc_hit_count else "missing",
             product_doc_hit_count,
-            "高" if product_doc_hit_count else "未知",
+            _source_confidence(
+                [item for item in evidence_pack.official if item.source_type in {"mrd", "manual"}],
+                hit_confidence="高",
+                missing_confidence="未知",
+            ),
             "产品 MRD/手册数据源暂未接入或未命中。" if not product_doc_hit_count else "已命中产品 MRD/手册依据。",
         ),
     ]
-    action, reason = _recommended_action(context, evidence_pack)
+    if _requires_media_source(context):
+        items.insert(
+            3,
+            _coverage_item(
+                "media_evidence",
+                "媒体观察证据",
+                "hit" if evidence_pack.media_hit_count else "miss",
+                "media_observation",
+                evidence_pack.media_hit_count,
+                _source_confidence(evidence_pack.media, hit_confidence="中", high_threshold=0.9),
+                "媒体证据只能作为视觉线索，不能单独作为正式结论。",
+            ),
+        )
+    action, reason = _recommended_action(context, evidence_pack, items)
     return DataSourceCoverage(
         items=items,
         recommended_action=action,
         owner_candidate=_owner_candidate(evidence_pack),
-        mention_enabled=False,
+        mention_enabled=action == "human_review",
         reason=reason,
     )
 
@@ -211,7 +223,7 @@ def render_case_context_for_prompt(context: UnifiedCaseContext, coverage: DataSo
     ]
     if coverage is not None:
         used = [item.source_name for item in coverage.items if item.status == "hit"]
-        missing = [item.source_name for item in coverage.items if item.status in {"missing", "not_configured"}]
+        missing = [item.source_name for item in coverage.items if item.status != "hit"]
         lines.extend(
             [
                 "",
@@ -219,7 +231,7 @@ def render_case_context_for_prompt(context: UnifiedCaseContext, coverage: DataSo
                 f"- 已命中/可参考：{', '.join(used) if used else '无'}",
                 f"- 缺失/未接入：{', '.join(missing) if missing else '无'}",
                 f"- 建议动作：{coverage.recommended_action}",
-                f"- 人工复核窗口：{'开启' if coverage.mention_enabled else '仅建议，不实际艾特'}",
+                f"- 人工复核窗口：{'开启' if coverage.mention_enabled else '关闭'}",
                 f"- 原因：{coverage.reason}",
             ]
         )
@@ -266,16 +278,46 @@ def _official_hit_count(evidence_pack: SupportEvidencePack, source_types: set[st
     )
 
 
-def _recommended_action(context: UnifiedCaseContext, evidence_pack: SupportEvidencePack) -> tuple[str, str]:
+def _recommended_action(
+    context: UnifiedCaseContext,
+    evidence_pack: SupportEvidencePack,
+    items: list[DataSourceCoverageItem],
+) -> tuple[str, str]:
+    if _all_sources_high_confidence(items):
+        return "answer", "SKU、正式依据、历史参考、媒体观察和产品文档均已高置信命中，可给出客服参考。"
+    if _has_any_source_hit(items):
+        return "human_review", "仅部分必需资料源命中，仍需人工复核；回复中应标注已参考和未参考的数据源。"
     if context.missing_information:
-        return "ask_clarification", "输入信息或多模态处理结果不足，需要先补充关键信息。"
-    if evidence_pack.has_formal_evidence:
-        return "answer", "已命中正式依据，可以给出相对肯定的客服参考。"
-    if evidence_pack.has_reviewed_history:
-        return "answer", "已命中已审核群聊历史 FAQ，可给出可靠售后参考；高风险售后承诺仍需正式依据或人工复核。"
-    if evidence_pack.media_hit_count:
-        return "human_review", "仅命中媒体观察证据，不能单独支撑处理口径，建议人工复核但不实际艾特负责人。"
-    return "human_review", "没有命中可支撑处理口径的数据源，建议人工复核但不实际艾特负责人。"
+        return "human_review", "输入信息或多模态处理结果不足，且所有资料源均未命中，需要人工复核。"
+    return "human_review", "SKU、正式依据、历史参考、媒体观察和产品文档均未命中，需要人工复核。"
+
+
+def _has_any_source_hit(items: list[DataSourceCoverageItem]) -> bool:
+    return any(item.status == "hit" and item.hit_count > 0 for item in items)
+
+
+def _requires_media_source(context: UnifiedCaseContext) -> bool:
+    return context.route.input_modality in {"image", "video", "mixed"}
+
+
+def _all_sources_high_confidence(items: list[DataSourceCoverageItem]) -> bool:
+    return bool(items) and all(item.status == "hit" and item.confidence == "高" for item in items)
+
+
+def _source_confidence(
+    items: list[object],
+    *,
+    hit_confidence: str,
+    missing_confidence: str = "低",
+    high_threshold: float | None = None,
+) -> str:
+    hit_items = [item for item in items if getattr(item, "status", "") == "hit"]
+    if not hit_items:
+        return missing_confidence
+    if high_threshold is not None:
+        best_score = max(float(getattr(item, "score", 0.0) or 0.0) for item in hit_items)
+        return "高" if best_score >= high_threshold else hit_confidence
+    return hit_confidence
 
 
 def _owner_candidate(evidence_pack: SupportEvidencePack) -> str:

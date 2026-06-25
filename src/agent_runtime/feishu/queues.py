@@ -31,4 +31,4 @@ class PerThreadQueue:
                 if not existing_lock.locked():
                     self._locks.pop(existing_key, None)
                     return
-            self._locks.popitem(last=False)
+            return

@@ -1,4 +1,4 @@
-"""ulanzi after-sell copilot MVP 运行时包。"""
+"""VIJIM-after-sale-copilot 运行时包。"""
 
 __all__ = ["__version__"]
 

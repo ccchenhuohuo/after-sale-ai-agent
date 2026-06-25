@@ -142,6 +142,19 @@ class Settings(BaseSettings):
     media_rag_require_vl_models: bool = False
     media_rag_top_k: int = 10
     media_rag_top_n: int = 5
+    yunting_api_base_url: str = "https://opendata.yuntingai.com"
+    yunting_access_token: str = ""
+    yunting_project_id: str = ""
+    yunting_data_root: str = "data/yunting/service"
+    yunting_doris_database: str = "agent_runtime"
+    doris_stream_load_hosts: str = ""
+    doris_stream_load_port: int = 8040
+    doris_user: str = ""
+    doris_password: str = ""
+    qdrant_url: str = ""
+    qdrant_api_key: str = ""
+    qdrant_text_collection: str = "yunting_service_text_v1_dev"
+    qdrant_media_collection: str = "yunting_service_media_v1_dev"
 
     @property
     def resolved_bailian_api_key(self) -> str:

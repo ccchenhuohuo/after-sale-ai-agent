@@ -1,0 +1,108 @@
+{
+  "code": 20000,
+  "msg": "success",
+  "traceId": "trace-structural-sample",
+  "result": {
+    "countInResponse": 1,
+    "returnedCount": 1,
+    "hasMore": false,
+    "pageTokenPresent": false,
+    "data": [
+      {
+        "unique": "sample-session-001",
+        "oid": "sample-oid-001",
+        "projectName": "Sample Project",
+        "sourceName": "Sample Platform",
+        "shopName": "Sample Store",
+        "sessionType": "AFTER_SALE",
+        "sessionStartTime": "2026-06-24 10:00:00.000",
+        "sessionCloseTime": "2026-06-24 10:08:00.000",
+        "userId": "sample-user-id",
+        "userName": "sample-user",
+        "serverNameList": ["sample-agent"],
+        "orderNoList": ["sample-order-no"],
+        "insertTimestamp": "2026-06-24 10:09:00.000",
+        "crawlTimestamp": "2026-06-24 10:10:00.000",
+        "escore": 0,
+        "score": 0,
+        "isDefault": "否",
+        "categoryId": 8,
+        "title": "结构样本：引闪器充电与续航咨询",
+        "topicConfigs": [
+          {"topicId": "brand", "topicName": "品牌", "topicValue": ["SampleBrand"]},
+          {"topicId": "sku", "topicName": "SKU", "topicValue": ["SAMPLE-SKU-01"]},
+          {"topicId": "product", "topicName": "品名", "topicValue": ["结构样本引闪器"]}
+        ],
+        "tagList": [
+          {"tagName": "充电咨询", "escore": 0.8},
+          {"tagName": "续航咨询", "escore": 0.7}
+        ],
+        "contents": [
+          {
+            "contentId": "msg-001",
+            "publishTime": "2026-06-24 10:00:01.000",
+            "role": "SERVER",
+            "messageType": "TEXT",
+            "userName": "sample-agent",
+            "content": "您好",
+            "productTitleList": []
+          },
+          {
+            "contentId": "msg-002",
+            "publishTime": "2026-06-24 10:01:00.000",
+            "role": "CUSTOMER",
+            "messageType": "TEXT",
+            "userName": "sample-user",
+            "content": "这个引闪器怎么判断已经充满电？",
+            "productTitleList": ["结构样本引闪器"]
+          },
+          {
+            "contentId": "msg-003",
+            "publishTime": "2026-06-24 10:01:40.000",
+            "role": "SERVER",
+            "messageType": "TEXT",
+            "userName": "sample-agent",
+            "content": "指示灯由红色变为绿色后可以判断为充满，首次使用建议充满后再断开电源。",
+            "productTitleList": ["结构样本引闪器"]
+          },
+          {
+            "contentId": "msg-004",
+            "publishTime": "2026-06-24 10:03:00.000",
+            "role": "CUSTOMER",
+            "messageType": "IMAGE",
+            "userName": "sample-user",
+            "content": "https://example.invalid/yunting/sample-image.jpg",
+            "productTitleList": []
+          },
+          {
+            "contentId": "msg-005",
+            "publishTime": "2026-06-24 10:04:00.000",
+            "role": "CUSTOMER",
+            "messageType": "VIDEO",
+            "userName": "sample-user",
+            "content": "https://example.invalid/yunting/sample-video.mp4",
+            "productTitleList": []
+          },
+          {
+            "contentId": "msg-006",
+            "publishTime": "2026-06-24 10:05:00.000",
+            "role": "CUSTOMER",
+            "messageType": "TEXT",
+            "userName": "sample-user",
+            "content": "充满后大概可以用多久？",
+            "productTitleList": []
+          },
+          {
+            "contentId": "msg-007",
+            "publishTime": "2026-06-24 10:05:40.000",
+            "role": "SERVER",
+            "messageType": "TEXT",
+            "userName": "sample-agent",
+            "content": "正常待机约三天，频繁触发会缩短续航，建议长时间不用时关闭电源。",
+            "productTitleList": []
+          }
+        ]
+      }
+    ]
+  }
+}

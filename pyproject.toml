@@ -25,6 +25,7 @@ dependencies = [
 [project.scripts]
 VIJIMcopilot = "agent_mvp:cli"
 feishu-long-connection = "agent_runtime.feishu.long_connection:main"
+yunting-service-pipeline = "agent_runtime.yunting.cli:main"
 
 [project.optional-dependencies]
 dev = [

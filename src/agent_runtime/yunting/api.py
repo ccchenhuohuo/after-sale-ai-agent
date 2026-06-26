@@ -14,6 +14,23 @@ class YuntingClient:
         self.access_token = access_token
         self.timeout_seconds = timeout_seconds
 
+    @classmethod
+    def from_source(
+        cls,
+        *,
+        base_url: str,
+        source: str,
+        third_party_id: str,
+        timeout_seconds: float = 60.0,
+    ) -> "YuntingClient":
+        token = fetch_access_token(
+            base_url=base_url,
+            source=source,
+            third_party_id=third_party_id,
+            timeout_seconds=timeout_seconds,
+        )
+        return cls(base_url=base_url, access_token=token, timeout_seconds=timeout_seconds)
+
     def pull_service_page(
         self,
         *,
@@ -73,6 +90,19 @@ class YuntingClient:
             if not has_more or not page_token:
                 break
         return sessions[:limit], pages
+
+
+def fetch_access_token(*, base_url: str, source: str, third_party_id: str, timeout_seconds: float = 60.0) -> str:
+    response = httpx.get(
+        f"{base_url.rstrip('/')}/oauth2/token",
+        params={"source": source, "third_party_id": third_party_id},
+        timeout=timeout_seconds,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("code") not in (20000, "20000") or not payload.get("result", {}).get("access_token"):
+        raise RuntimeError(f"Yunting token fetch failed: code={payload.get('code')}, msg={payload.get('msg')}")
+    return str(payload["result"]["access_token"])
 
 
 def default_time_window(days: int = 14) -> tuple[str, str]:

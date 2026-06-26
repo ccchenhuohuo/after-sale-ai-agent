@@ -31,7 +31,7 @@
 拉取最新 10 条真实云听客服会话：
 
 ```bash
-YUNTING_ACCESS_TOKEN=... YUNTING_PROJECT_ID=... \
+YUNTING_SOURCE=... YUNTING_THIRD_PARTY_ID=... YUNTING_PROJECT_ID=... \
 python scripts/yunting_service_pipeline.py pull-latest-10
 ```
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from agent_runtime.yunting import dagster_defs
 from agent_runtime.yunting import cli as yunting_cli
-from agent_runtime.yunting.api import YuntingClient
+from agent_runtime.yunting.api import YuntingClient, fetch_access_token
 from agent_runtime.yunting.common import SOURCE_TYPE
 from agent_runtime.yunting.doris import DorisStreamLoadAdapter
 from agent_runtime.yunting.pipeline import build_yunting_layers, extract_sessions
@@ -174,3 +174,27 @@ def test_yunting_client_rejects_business_error(monkeypatch):
         assert "trace-error" in str(exc)
     else:
         raise AssertionError("expected business-code failure")
+
+
+def test_yunting_token_fetch_uses_source_and_third_party(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"code": 20000, "result": {"access_token": "token-from-source"}}
+
+    def fake_get(url, params, timeout):
+        assert url == "https://opendata.yuntingai.com/oauth2/token"
+        assert params == {"source": "source-id", "third_party_id": "third-party"}
+        return Response()
+
+    monkeypatch.setattr("agent_runtime.yunting.api.httpx.get", fake_get)
+
+    token = fetch_access_token(
+        base_url="https://opendata.yuntingai.com",
+        source="source-id",
+        third_party_id="third-party",
+    )
+
+    assert token == "token-from-source"

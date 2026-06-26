@@ -144,6 +144,8 @@ class Settings(BaseSettings):
     media_rag_top_n: int = 5
     yunting_api_base_url: str = "https://opendata.yuntingai.com"
     yunting_access_token: str = ""
+    yunting_source: str = ""
+    yunting_third_party_id: str = ""
     yunting_project_id: str = ""
     yunting_data_root: str = "data/yunting/service"
     yunting_doris_database: str = "agent_runtime"

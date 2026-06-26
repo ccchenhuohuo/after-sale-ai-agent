@@ -25,14 +25,24 @@ def run_id() -> str:
 
 def cmd_pull_latest_10(args: argparse.Namespace) -> None:
     start_time, end_time = (args.start_time, args.end_time) if args.start_time and args.end_time else default_time_window(args.days)
-    client = YuntingClient(
-        base_url=args.base_url or env("YUNTING_API_BASE_URL", "https://opendata.yuntingai.com"),
-        access_token=env("YUNTING_ACCESS_TOKEN"),
-        timeout_seconds=args.timeout_seconds,
-    )
+    base_url = args.base_url or env("YUNTING_API_BASE_URL", "https://opendata.yuntingai.com")
+    access_token = env("YUNTING_ACCESS_TOKEN")
+    if access_token:
+        client = YuntingClient(base_url=base_url, access_token=access_token, timeout_seconds=args.timeout_seconds)
+    else:
+        source = env("YUNTING_SOURCE")
+        third_party_id = env("YUNTING_THIRD_PARTY_ID")
+        if not source or not third_party_id:
+            raise SystemExit("Set YUNTING_ACCESS_TOKEN or both YUNTING_SOURCE and YUNTING_THIRD_PARTY_ID.")
+        client = YuntingClient.from_source(
+            base_url=base_url,
+            source=source,
+            third_party_id=third_party_id,
+            timeout_seconds=args.timeout_seconds,
+        )
     project_id = args.project_id or env("YUNTING_PROJECT_ID")
     if not client.access_token or not project_id:
-        raise SystemExit("YUNTING_ACCESS_TOKEN and YUNTING_PROJECT_ID are required for real API pulls.")
+        raise SystemExit("YUNTING_PROJECT_ID is required for real API pulls.")
     current_run_id = args.run_id or run_id()
     sessions, pages = client.pull_service_sessions(project_id=project_id, start_time=start_time, end_time=end_time, limit=args.limit)
     data_root = Path(args.data_root)

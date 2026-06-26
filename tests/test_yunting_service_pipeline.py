@@ -289,9 +289,9 @@ def test_stream_load_doris_cli_uses_layer_order(tmp_path, monkeypatch):
 
 
 def test_doris_table_specs_include_unique_keys_and_partitions():
-    assert DORIS_TABLES["ods_api_yunting_service_page_log_d"].key_columns == ("run_id", "page_no")
+    assert DORIS_TABLES["ods_api_yunting_service_page_log_d"].key_columns == ("run_id", "page_no", "dt")
     assert DORIS_TABLES["ods_api_yunting_service_page_log_d"].partition_column == "dt"
-    assert DORIS_TABLES["dim_yunting_topic_value"].key_columns == ("unique_id", "topic_name", "topic_value_hash")
+    assert DORIS_TABLES["dim_yunting_topic_value"].key_columns == ("unique_id", "topic_name", "topic_value_hash", "dt")
     assert DORIS_TABLES["ads_agent_yunting_pipeline_dashboard_d"].key_columns == ("stat_date", "run_id")
     assert DORIS_TABLES["dm_yunting_service_quality_d"].key_columns == ("stat_date", "stat_week", "source_type")
     assert DORIS_TABLES["dws_yunting_service_faq_chunk_d"].partition_column == "stat_date"
@@ -303,7 +303,7 @@ def test_doris_ddl_uses_unique_keys_and_partitions():
     assert "DUPLICATE KEY" not in ddl
     assert "AUTO PARTITION BY LIST (dt)" in ddl
     assert "AUTO PARTITION BY LIST (stat_date)" in ddl
-    assert "UNIQUE KEY(unique_id, topic_name, topic_value_hash)" in ddl
+    assert "UNIQUE KEY(unique_id, topic_name, topic_value_hash, dt)" in ddl
 
 
 def test_doris_stream_load_uses_post_request(monkeypatch):

@@ -99,6 +99,33 @@ def test_doris_stream_load_plan_is_dry_run_and_deterministic():
     assert "message_pk" in plan.columns
 
 
+def test_doris_stream_load_uses_post_request(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"Status": "Success", "NumberLoadedRows": 1, "NumberFilteredRows": 0}
+
+    def fake_request(method, url, **kwargs):
+        calls.append({"method": method, "url": url, **kwargs})
+        return FakeResponse()
+
+    monkeypatch.setattr("agent_runtime.yunting.doris.httpx.request", fake_request)
+    adapter = DorisStreamLoadAdapter(hosts=["doris.example"], port=33060, database="agent_runtime")
+
+    result = adapter.stream_load("std_api_yunting_service_message_f_d", [{"message_pk": "m1"}], run_id="test_run")
+
+    assert result["Status"] == "Success"
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"] == "http://doris.example:33060/api/agent_runtime/std_api_yunting_service_message_f_d/_stream_load"
+    assert calls[0]["headers"]["Content-Type"] == "application/json; charset=utf-8"
+    assert calls[0]["headers"]["Expect"] == "100-continue"
+    assert calls[0]["headers"]["strip_outer_array"] == "true"
+
+
 def test_qdrant_dry_run_delete_and_upsert_are_explicit():
     layers, _ = build_yunting_layers(load_fixture_sessions(), run_id="test_run", raw_file_path=str(FIXTURE))
     points = text_points_from_ads(layers["ads_agent_yunting_faq_vector_api_d"], mock_dimension=8)

@@ -50,12 +50,22 @@ def build_stream_load_plan(
 
 
 class DorisStreamLoadAdapter:
-    def __init__(self, *, hosts: list[str], port: int = 8040, user: str = "", password: str = "", database: str = "agent_runtime") -> None:
+    def __init__(
+        self,
+        *,
+        hosts: list[str],
+        port: int = 8040,
+        user: str = "",
+        password: str = "",
+        database: str = "agent_runtime",
+        method: str = "POST",
+    ) -> None:
         self.hosts = hosts
         self.port = port
         self.user = user
         self.password = password
         self.database = database
+        self.method = method
 
     def dry_run(self, table_name: str, rows: list[dict[str, Any]], *, run_id: str, batch_no: int = 1) -> StreamLoadPlan:
         return build_stream_load_plan(database=self.database, table_name=table_name, rows=rows, run_id=run_id, batch_no=batch_no)
@@ -66,6 +76,8 @@ class DorisStreamLoadAdapter:
             raise ValueError("Doris hosts are required for real Stream Load")
         body = json.dumps(rows, ensure_ascii=False)
         headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Expect": "100-continue",
             "format": "json",
             "strip_outer_array": "true",
             "disable_stream_load_sql_check": "true",
@@ -77,7 +89,8 @@ class DorisStreamLoadAdapter:
         last_error: Exception | None = None
         for host in self.hosts:
             try:
-                response = httpx.put(
+                response = httpx.request(
+                    self.method,
                     f"http://{host}:{self.port}/api/{self.database}/{table_name}/_stream_load",
                     content=body.encode("utf-8"),
                     headers=headers,

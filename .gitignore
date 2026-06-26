@@ -24,6 +24,7 @@ data/reply_ledger.sqlite3
 data/history_rag/
 data/media_rag/
 data/sku_catalog/
+data/yunting/
 
 dist/
 build/

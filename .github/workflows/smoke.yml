@@ -35,5 +35,11 @@ jobs:
       - name: Run offline smoke
         run: make smoke
 
+      - name: Check for Yunting raw data and secret leaks
+        run: python scripts/check_no_yunting_secrets.py
+
       - name: Run smoke tests
         run: python -m pytest tests/test_smoke_support_copilot.py -q
+
+      - name: Run Yunting pipeline tests
+        run: python -m pytest tests/test_yunting_service_pipeline.py -q

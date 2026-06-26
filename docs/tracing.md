@@ -9,7 +9,7 @@ https://platform.openai.com/logs?api=traces
 Phoenix 地址：
 
 ```text
-http://100.111.223.41:6006
+http://phoenix.example.local:6006
 ```
 
 ## DeepSeek 模型与 Tracing
@@ -35,7 +35,7 @@ SUPPORT_AGENT_TRACE_INCLUDE_SENSITIVE_DATA=true
 SUPPORT_AGENT_TRACE_WORKFLOW_NAME=VIJIM-after-sale-copilot
 
 PHOENIX_TRACING_ENABLED=true
-PHOENIX_COLLECTOR_ENDPOINT=http://100.111.223.41:6006/v1/traces
+PHOENIX_COLLECTOR_ENDPOINT=http://phoenix.example.local:6006/v1/traces
 PHOENIX_PROJECT_NAME=VIJIM-after-sale-copilot
 ```
 

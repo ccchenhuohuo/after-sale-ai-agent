@@ -128,7 +128,7 @@ class OpenAICompatibleEmbeddingProvider:
         )
         base_url = os.getenv("YUNTING_TEXT_EMBEDDING_BASE_URL") or os.getenv("BAILIAN_EMBEDDING_BASE_URL") or ""
         model = os.getenv("YUNTING_TEXT_EMBEDDING_MODEL", "text-embedding-v4")
-        dimension = int(os.getenv("YUNTING_TEXT_EMBEDDING_DIMENSION", "768"))
+        dimension = int(os.getenv("YUNTING_TEXT_EMBEDDING_DIMENSION", "1024"))
         backend = os.getenv("YUNTING_TEXT_EMBEDDING_BACKEND", "openai-compatible")
         timeout_seconds = float(os.getenv("YUNTING_TEXT_EMBEDDING_TIMEOUT_SECONDS", "60"))
         if not api_key or not base_url:

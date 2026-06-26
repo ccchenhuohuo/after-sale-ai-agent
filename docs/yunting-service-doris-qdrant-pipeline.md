@@ -77,7 +77,7 @@ python scripts/yunting_service_pipeline.py mock-upsert-qdrant-dev \
   --batch-size 256
 ```
 
-mock 命令仅验证 Qdrant collection、delete、upsert 链路：文本维度默认 768，媒体维度默认 1024。生产 upsert 会校验 ADS `vector_model`、`vector_dimension`、collection schema 与实际向量一致，并在未配置真实 embedding provider 时失败。
+mock 命令仅验证 Qdrant collection、delete、upsert 链路：文本维度默认 1024，媒体维度默认 1024。生产 upsert 会校验 ADS `vector_model`、`vector_dimension`、collection schema 与实际向量一致，并在未配置真实 embedding provider 时失败。
 
 ## Doris 分层
 

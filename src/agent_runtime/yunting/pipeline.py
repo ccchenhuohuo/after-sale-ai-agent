@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -840,7 +841,7 @@ def _build_ads_and_dm(
                 "case_id": chunk["case_id"],
                 "unique_id": chunk["unique_id"],
                 "vector_model": "text-embedding-v4",
-                "vector_dimension": 768,
+                "vector_dimension": int(os.getenv("YUNTING_TEXT_EMBEDDING_DIMENSION", "1024")),
                 "payload_json": compact_json(payload),
                 "payload_hash": sha256_text(compact_json(payload)),
                 "embedding_text": chunk["chunk_text"],

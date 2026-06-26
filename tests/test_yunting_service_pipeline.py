@@ -231,10 +231,10 @@ def test_authority_payload_is_preserved_for_qdrant_rows():
 
     semantic_points = text_points_from_vectors(
         ads_rows[:1],
-        [[0.1] * 768],
+        [[0.1] * 1024],
         collection="yunting_service_text_v1_dev",
         vector_model="text-embedding-v4",
-        vector_dimension=768,
+        vector_dimension=1024,
         backend="test-provider",
     )
     assert semantic_points[0].payload["embedding_backend"] == "test-provider"
@@ -423,7 +423,7 @@ def test_qdrant_adapter_real_methods_call_expected_endpoints(monkeypatch):
     monkeypatch.setattr("agent_runtime.yunting.qdrant.httpx.post", fake_post)
 
     adapter = QdrantAdapter(url="http://localhost:6333", api_key="secret")
-    adapter.ensure_collection("text_dev", vector_size=768)
+    adapter.ensure_collection("text_dev", vector_size=1024)
     adapter.ensure_keyword_payload_index("text_dev", "unique_id")
     adapter.count_by_data_version("text_dev", "run-1")
     adapter.delete_by_unique_id("text_dev", "session-1")
@@ -432,7 +432,7 @@ def test_qdrant_adapter_real_methods_call_expected_endpoints(monkeypatch):
 
     assert calls[0] == ("GET", "http://localhost:6333/collections/text_dev", None)
     assert calls[1][0] == "PUT"
-    assert calls[1][2]["vectors"]["size"] == 768
+    assert calls[1][2]["vectors"]["size"] == 1024
     assert calls[2][0] == "PUT"
     assert calls[2][2]["field_name"] == "unique_id"
     assert calls[3][0] == "POST"
@@ -450,13 +450,13 @@ def test_qdrant_collection_distance_mismatch_fails(monkeypatch):
         status_code = 200
 
         def json(self):
-            return {"result": {"config": {"params": {"vectors": {"size": 768, "distance": "Dot"}}}}}
+            return {"result": {"config": {"params": {"vectors": {"size": 1024, "distance": "Dot"}}}}}
 
     monkeypatch.setattr("agent_runtime.yunting.qdrant.httpx.get", lambda *args, **kwargs: FakeResponse())
     adapter = QdrantAdapter(url="http://localhost:6333")
 
     try:
-        adapter.ensure_collection("text_dev", vector_size=768, distance="Cosine")
+        adapter.ensure_collection("text_dev", vector_size=1024, distance="Cosine")
     except RuntimeError as exc:
         assert "distance Dot" in str(exc)
     else:
@@ -726,7 +726,7 @@ def test_cli_parser_exposes_mock_and_real_upsert_qdrant():
     )
 
     assert real_args.func == yunting_cli.cmd_upsert_qdrant
-    assert real_args.text_dimension == 768
+    assert real_args.text_dimension == 1024
     assert real_args.batch_size == 100
 
 
@@ -739,7 +739,7 @@ def test_mock_upsert_rejects_non_dev_collection(tmp_path):
         layers_dir=str(layers_dir),
         collection="yunting_service_text_v1",
         media_collection="yunting_service_media_v1_dev",
-        text_dimension=768,
+        text_dimension=1024,
         media_dimension=1024,
         batch_size=100,
     )
@@ -765,7 +765,7 @@ def test_real_upsert_requires_embedding_provider(tmp_path, monkeypatch):
         media_collection="yunting_service_media_v1",
         run_id="test_run",
         text_model="text-embedding-v4",
-        text_dimension=768,
+        text_dimension=1024,
         batch_size=100,
         skip_doris_writeback=True,
     )

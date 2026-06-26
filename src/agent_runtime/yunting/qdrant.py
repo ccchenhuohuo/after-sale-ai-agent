@@ -34,6 +34,24 @@ def text_points_from_ads(rows: list[dict[str, Any]], *, mock_dimension: int = 8)
     return points
 
 
+def media_points_from_ads(rows: list[dict[str, Any]], *, mock_dimension: int = 8) -> list[QdrantPoint]:
+    points: list[QdrantPoint] = []
+    for row in rows:
+        payload = json.loads(row["payload_json"])
+        payload["media_object_key"] = row.get("media_object_key", "")
+        vector_seed = " ".join(
+            str(part or "")
+            for part in (
+                payload.get("message_type"),
+                payload.get("content_id"),
+                payload.get("asset_id"),
+                row.get("media_object_key"),
+            )
+        )
+        points.append(QdrantPoint(id=row["point_id"], vector=mock_vector(vector_seed, mock_dimension), payload=payload))
+    return points
+
+
 class QdrantAdapter:
     def __init__(self, *, url: str, api_key: str = "") -> None:
         self.url = url.rstrip("/")

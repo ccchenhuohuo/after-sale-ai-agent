@@ -98,7 +98,13 @@ class DorisStreamLoadAdapter:
                     timeout=120,
                 )
                 response.raise_for_status()
-                return response.json()
+                result = response.json()
+                status = str(result.get("Status", ""))
+                filtered_rows = int(result.get("NumberFilteredRows", 0) or 0)
+                loaded_rows = int(result.get("NumberLoadedRows", 0) or 0)
+                if status != "Success" or filtered_rows != 0 or loaded_rows != len(rows):
+                    raise RuntimeError(f"Doris Stream Load rejected rows for {table_name}: {json.dumps(result, ensure_ascii=False)}")
+                return result
             except Exception as exc:  # pragma: no cover - network fallback path
                 last_error = exc
         raise RuntimeError(f"Doris Stream Load failed for {table_name}: {last_error}") from last_error

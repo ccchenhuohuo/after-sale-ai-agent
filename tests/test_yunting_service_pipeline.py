@@ -8,7 +8,7 @@ from agent_runtime.yunting.api import YuntingClient, fetch_access_token
 from agent_runtime.yunting.common import SOURCE_TYPE
 from agent_runtime.yunting.doris import DorisStreamLoadAdapter
 from agent_runtime.yunting.pipeline import build_yunting_layers, extract_sessions
-from agent_runtime.yunting.qdrant import QdrantAdapter, text_points_from_ads
+from agent_runtime.yunting.qdrant import QdrantAdapter, media_points_from_ads, text_points_from_ads
 from agent_runtime.yunting.tables import DORIS_TABLES
 
 
@@ -57,6 +57,54 @@ def test_topic_tags_messages_and_media_are_normalized():
     assert not any(row["answer"] == "您好" for row in answer_chunks)
     assert not any("您好" in row["chunk_text"] for row in layers["dws_yunting_service_faq_chunk_d"])
     assert all(json.loads(row["source_content_ids_json"]) for row in answer_chunks)
+
+
+def test_pipeline_normalizes_json_strings_roles_and_filters_non_answers():
+    session = {
+        "unique": "quality-session-001",
+        "isDefault": "否",
+        "sessionStartTime": "2026-06-24 10:00:00.000",
+        "topicConfigs": json.dumps([{"topicName": "SKU", "topicValue": ["SKU-JSON"]}], ensure_ascii=False),
+        "tagList": json.dumps([{"tagName": "兜底过滤"}], ensure_ascii=False),
+        "contents": [
+            {
+                "contentId": "answer-valid",
+                "publishTime": "2026-06-24 10:03:00.000",
+                "role": "客服",
+                "messageType": "文本",
+                "content": "可以先长按电源键复位，再重新插电充电观察指示灯状态。",
+            },
+            {
+                "contentId": "answer-invalid",
+                "publishTime": "2026-06-24 10:02:00.000",
+                "role": "客服",
+                "messageType": "TEXT",
+                "content": "请提供订单号",
+            },
+            {
+                "contentId": "question",
+                "publishTime": "2026-06-24 10:01:00.000",
+                "role": "客户",
+                "messageType": "TEXT",
+                "content": "这个设备不能开机怎么办？",
+            },
+        ],
+    }
+
+    layers, _ = build_yunting_layers([session], run_id="test_run", raw_file_path="fixture")
+
+    messages = layers["std_api_yunting_service_message_f_d"]
+    assert [row["content_id"] for row in messages] == ["question", "answer-invalid", "answer-valid"]
+    assert {row["role"] for row in messages} == {"CUSTOMER", "SERVER"}
+    assert {row["message_type"] for row in messages} == {"TEXT"}
+    assert any(row["topic_value"] == "SKU-JSON" for row in layers["dim_yunting_topic_value"])
+    assert any(row["tag_name"] == "兜底过滤" for row in layers["dim_yunting_tag"])
+
+    answer_chunks = [row for row in layers["dws_yunting_service_faq_chunk_d"] if row["chunk_type"] == "answer_unit"]
+    assert len(answer_chunks) == 1
+    assert "请提供订单号" not in answer_chunks[0]["chunk_text"]
+    payload = json.loads(layers["ads_agent_yunting_faq_vector_api_d"][0]["payload_json"])
+    assert payload["source_content_ids"]
 
 
 def test_authority_payload_is_preserved_for_qdrant_rows():
@@ -126,6 +174,25 @@ def test_doris_stream_load_uses_post_request(monkeypatch):
     assert calls[0]["headers"]["strip_outer_array"] == "true"
 
 
+def test_doris_stream_load_rejects_filtered_rows(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"Status": "Success", "NumberLoadedRows": 0, "NumberFilteredRows": 1}
+
+    monkeypatch.setattr("agent_runtime.yunting.doris.httpx.request", lambda *args, **kwargs: FakeResponse())
+    adapter = DorisStreamLoadAdapter(hosts=["doris.example"], port=33060, database="agent_runtime")
+
+    try:
+        adapter.stream_load("std_api_yunting_service_message_f_d", [{"message_pk": "m1"}], run_id="test_run")
+    except RuntimeError as exc:
+        assert "rejected rows" in str(exc)
+    else:
+        raise AssertionError("expected filtered rows to fail")
+
+
 def test_qdrant_dry_run_delete_and_upsert_are_explicit():
     layers, _ = build_yunting_layers(load_fixture_sessions(), run_id="test_run", raw_file_path=str(FIXTURE))
     points = text_points_from_ads(layers["ads_agent_yunting_faq_vector_api_d"], mock_dimension=8)
@@ -138,6 +205,16 @@ def test_qdrant_dry_run_delete_and_upsert_are_explicit():
     assert delete_plan["filter"]["must"][0]["match"]["value"] == "sample-session-001"
     assert upsert_plan["point_count"] == len(points)
     assert upsert_plan["dry_run"] is True
+
+
+def test_media_points_from_ads_preserve_payload_and_object_key():
+    layers, _ = build_yunting_layers(load_fixture_sessions(), run_id="test_run", raw_file_path=str(FIXTURE))
+    points = media_points_from_ads(layers["ads_agent_yunting_media_vector_api_d"], mock_dimension=8)
+
+    assert points
+    assert len(points[0].vector) == 8
+    assert points[0].payload["media_object_key"].startswith("media/sha256/pending/")
+    assert points[0].payload["message_type"] in {"IMAGE", "VIDEO"}
 
 
 def test_dagster_handoff_module_imports_without_hard_dependency():

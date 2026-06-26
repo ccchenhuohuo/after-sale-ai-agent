@@ -43,6 +43,39 @@ GREETING_REJECTS = {
     "欢迎光临",
 }
 
+NON_ANSWER_PATTERNS = (
+    "转人工",
+    "人工客服",
+    "无法回答",
+    "不能回答",
+    "不清楚",
+    "不知道",
+    "没有答案",
+    "仅供参考",
+    "请提供订单",
+    "请提供订单号",
+    "麻烦提供订单",
+    "麻烦您提供订单",
+)
+
+ROLE_ALIASES = {
+    "CUSTOMER": "CUSTOMER",
+    "USER": "CUSTOMER",
+    "BUYER": "CUSTOMER",
+    "CLIENT": "CUSTOMER",
+    "客户": "CUSTOMER",
+    "用户": "CUSTOMER",
+    "买家": "CUSTOMER",
+    "SERVER": "SERVER",
+    "SERVICE": "SERVER",
+    "AGENT": "SERVER",
+    "SELLER": "SERVER",
+    "STAFF": "SERVER",
+    "客服": "SERVER",
+    "商家": "SERVER",
+    "卖家": "SERVER",
+}
+
 
 @dataclass(frozen=True)
 class PipelineManifest:
@@ -108,14 +141,51 @@ def session_unique_id(session: dict[str, Any]) -> str:
 
 def session_contents(session: dict[str, Any]) -> list[dict[str, Any]]:
     contents = first_present(session, "contents", "contentList", default=[])
+    contents = _parse_json_value(contents, [])
     if isinstance(contents, list):
-        return [item for item in contents if isinstance(item, dict)]
+        messages = [item for item in contents if isinstance(item, dict)]
+        return sorted(messages, key=_message_sort_key)
     return []
+
+
+def _parse_json_value(value: Any, default: Any) -> Any:
+    if isinstance(value, str):
+        text = value.strip()
+        if text and text[0] in "[{":
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return default
+    return value
+
+
+def _message_sort_key(message: dict[str, Any]) -> tuple[str, str]:
+    publish_time = normalize_time(first_present(message, "publishTime", "publish_time", default=""))
+    content_id = clean_text(first_present(message, "contentId", "content_id", "id"))
+    return publish_time, content_id
+
+
+def _normalize_role(value: Any) -> str:
+    raw = clean_text(value)
+    upper = raw.upper()
+    return ROLE_ALIASES.get(upper) or ROLE_ALIASES.get(raw) or upper
+
+
+def _normalize_message_type(value: Any) -> str:
+    raw = clean_text(value).upper()
+    if raw in {"IMAGE", "IMG", "PICTURE", "PIC", "图片"}:
+        return "IMAGE"
+    if raw in {"VIDEO", "VID", "视频"}:
+        return "VIDEO"
+    if raw in {"TEXT", "TXT", "文本", "文字", ""}:
+        return "TEXT"
+    return raw
 
 
 def topic_values(session: dict[str, Any]) -> dict[str, list[str]]:
     topics: dict[str, list[str]] = defaultdict(list)
-    for topic in first_present(session, "topicConfigs", "topic_configs", default=[]) or []:
+    topic_configs = _parse_json_value(first_present(session, "topicConfigs", "topic_configs", default=[]), [])
+    for topic in topic_configs or []:
         if not isinstance(topic, dict):
             continue
         name = clean_text(first_present(topic, "topicName", "topic_name", "name"))
@@ -131,7 +201,8 @@ def topic_values(session: dict[str, Any]) -> dict[str, list[str]]:
 
 def tag_names(session: dict[str, Any]) -> list[str]:
     names: list[str] = []
-    for tag in first_present(session, "tagList", "tag_list", default=[]) or []:
+    tag_list = _parse_json_value(first_present(session, "tagList", "tag_list", default=[]), [])
+    for tag in tag_list or []:
         if isinstance(tag, dict):
             names.append(clean_text(first_present(tag, "tagName", "tag_name", "name", "tag")))
         else:
@@ -143,8 +214,8 @@ def _message_row(session: dict[str, Any], message: dict[str, Any], index: int, r
     unique_id = session_unique_id(session)
     content_id = clean_text(first_present(message, "contentId", "content_id", "id")) or f"{unique_id}:{index}"
     publish_time = normalize_time(first_present(message, "publishTime", "publish_time", default=first_present(session, "publishTime", "publish_time")))
-    message_type = clean_text(first_present(message, "messageType", "message_type", "type")).upper() or "TEXT"
-    role = clean_text(first_present(message, "role", "senderRole", default="")).upper()
+    message_type = _normalize_message_type(first_present(message, "messageType", "message_type", "type"))
+    role = _normalize_role(first_present(message, "role", "senderRole", default=""))
     content = clean_text(first_present(message, "content", "text", "contentText"))
     return {
         "message_pk": stable_id(unique_id, content_id, index),
@@ -199,7 +270,24 @@ def _is_substantial_answer(text: str) -> bool:
         return False
     if any(stripped.startswith(prefix) and len(stripped) < 12 for prefix in GREETING_REJECTS):
         return False
+    if any(pattern in stripped and len(stripped) < 28 for pattern in NON_ANSWER_PATTERNS):
+        return False
     return True
+
+
+def _is_customer_question(text: str) -> bool:
+    stripped = clean_text(text)
+    if len(stripped) < 4:
+        return False
+    return any(marker in stripped for marker in ("?", "？", "怎么", "如何", "多久", "多少", "能否", "可以", "怎么办", "为什么", "是否", "啥", "吗"))
+
+
+def _is_evidence_customer_message(message: dict[str, Any]) -> bool:
+    if message["role"] != "CUSTOMER":
+        return False
+    if message["message_type"] in {"IMAGE", "VIDEO"}:
+        return True
+    return message["message_type"] == "TEXT" and _is_customer_question(message["content_text"])
 
 
 def _authority_fields() -> dict[str, Any]:
@@ -228,8 +316,9 @@ def _build_faq_rows(
     topics = topic_values(session)
     tags = tag_names(session)
     customer_texts = [m["content_text"] for m in messages if m["role"] == "CUSTOMER" and m["message_type"] == "TEXT" and m["content_text"]]
+    evidence_customer_messages = [m for m in messages if _is_evidence_customer_message(m)]
     server_texts = [m["content_text"] for m in messages if m["role"] == "SERVER" and m["message_type"] == "TEXT" and _is_substantial_answer(m["content_text"])]
-    if not server_texts:
+    if not server_texts or not evidence_customer_messages:
         return [], [], []
 
     case_id = stable_id("case", unique_id)
@@ -303,10 +392,10 @@ def _build_faq_rows(
 
     last_customer: dict[str, Any] | None = None
     for message in messages:
-        if message["role"] == "CUSTOMER" and message["message_type"] == "TEXT" and message["content_text"]:
+        if _is_evidence_customer_message(message):
             last_customer = message
         elif message["role"] == "SERVER" and message["message_type"] == "TEXT" and _is_substantial_answer(message["content_text"]):
-            question = last_customer["content_text"] if last_customer else case["customer_question_summary"]
+            question = last_customer["content_text"] if last_customer and last_customer["message_type"] == "TEXT" else case["customer_question_summary"]
             text = f"客户问题：{question}\n客服回答：{message['content_text']}"
             ids = [message["content_id"]]
             if last_customer:
@@ -416,8 +505,8 @@ def build_yunting_layers(
             "is_default": first_present(session, "isDefault", "is_default", default=""),
             "category_id": clean_text(first_present(session, "categoryId", "category_id")),
             "contents_json": compact_json(contents),
-            "topic_configs_json": compact_json(first_present(session, "topicConfigs", "topic_configs", default=[])),
-            "tag_list_json": compact_json(first_present(session, "tagList", "tag_list", default=[])),
+            "topic_configs_json": compact_json(_parse_json_value(first_present(session, "topicConfigs", "topic_configs", default=[]), [])),
+            "tag_list_json": compact_json(_parse_json_value(first_present(session, "tagList", "tag_list", default=[]), [])),
             "raw_file_path": raw_file_path,
             "source_system": SOURCE_SYSTEM,
             "biz_create_time": insert_timestamp,
@@ -452,7 +541,8 @@ def build_yunting_layers(
                         "dt": dt,
                     }
                 )
-        for tag in first_present(session, "tagList", "tag_list", default=[]) or []:
+        tag_list = _parse_json_value(first_present(session, "tagList", "tag_list", default=[]), [])
+        for tag in tag_list or []:
             tag_name = clean_text(first_present(tag, "tagName", "tag_name", "name", "tag")) if isinstance(tag, dict) else clean_text(tag)
             if not tag_name:
                 continue
@@ -525,6 +615,7 @@ def _build_ads_and_dm(
             "authority_level": chunk["authority_level"],
             "authority_score": chunk["authority_score"],
             "can_be_reference": chunk["can_be_reference"],
+            "source_content_ids": json.loads(chunk["source_content_ids_json"]),
             "stat_date": chunk["stat_date"],
         }
         layers["ads_agent_yunting_faq_vector_api_d"].append(
@@ -541,7 +632,7 @@ def _build_ads_and_dm(
                 "embedding_text": chunk["chunk_text"],
                 "embedding_text_hash": chunk["embedding_text_hash"],
                 "sync_status": "pending",
-                "last_synced_at": "",
+                "last_synced_at": None,
                 "error_message": "",
                 "stat_date": chunk["stat_date"],
                 "stat_week": chunk["stat_week"],
@@ -579,7 +670,7 @@ def _build_ads_and_dm(
                 "payload_json": compact_json(payload),
                 "media_object_key": media_object_keys.get(media["asset_id"], ""),
                 "sync_status": "pending",
-                "last_synced_at": "",
+                "last_synced_at": None,
                 "error_message": "",
                 "stat_date": media["stat_date"],
                 "stat_week": media["stat_week"],

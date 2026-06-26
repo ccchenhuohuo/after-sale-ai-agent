@@ -8,7 +8,7 @@ from typing import Any
 from agent_runtime.yunting.api import YuntingClient, default_time_window, message_tree_preview, write_raw_run
 from agent_runtime.yunting.doris import DorisStreamLoadAdapter
 from agent_runtime.yunting.pipeline import build_yunting_layers, extract_sessions, load_raw_sessions, load_raw_sessions_from_dir, write_layers
-from agent_runtime.yunting.qdrant import QdrantAdapter, text_points_from_ads
+from agent_runtime.yunting.qdrant import QdrantAdapter, media_points_from_ads, text_points_from_ads
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -169,18 +169,32 @@ def cmd_dry_run_doris(args: argparse.Namespace) -> None:
 
 def cmd_dry_run_qdrant(args: argparse.Namespace) -> None:
     layers_dir = Path(args.layers_dir)
-    rows = [
+    text_rows = [
         json.loads(line)
         for line in (layers_dir / "ads_agent_yunting_faq_vector_api_d.jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    points = text_points_from_ads(rows, mock_dimension=args.mock_dimension)
-    collection = args.collection or env("QDRANT_TEXT_COLLECTION", "yunting_service_text_v1_dev")
+    media_rows = [
+        json.loads(line)
+        for line in (layers_dir / "ads_agent_yunting_media_vector_api_d.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    text_points = text_points_from_ads(text_rows, mock_dimension=args.mock_dimension)
+    media_points = media_points_from_ads(media_rows, mock_dimension=args.mock_dimension)
+    text_collection = args.collection or env("QDRANT_TEXT_COLLECTION", "yunting_service_text_v1_dev")
+    media_collection = args.media_collection or env("QDRANT_MEDIA_COLLECTION", "yunting_service_media_v1_dev")
     adapter = QdrantAdapter(url=env("QDRANT_URL", "http://localhost:6333"), api_key=env("QDRANT_API_KEY"))
-    unique_ids = sorted({point.payload["unique_id"] for point in points if point.payload.get("unique_id")})
+    text_unique_ids = sorted({point.payload["unique_id"] for point in text_points if point.payload.get("unique_id")})
+    media_unique_ids = sorted({point.payload["unique_id"] for point in media_points if point.payload.get("unique_id")})
     plan = {
-        "delete_old_points": [adapter.dry_run_delete_by_unique_id(collection, unique_id) for unique_id in unique_ids],
-        "upsert_new_points": adapter.dry_run_upsert(collection, points),
+        "text": {
+            "delete_old_points": [adapter.dry_run_delete_by_unique_id(text_collection, unique_id) for unique_id in text_unique_ids],
+            "upsert_new_points": adapter.dry_run_upsert(text_collection, text_points),
+        },
+        "media": {
+            "delete_old_points": [adapter.dry_run_delete_by_unique_id(media_collection, unique_id) for unique_id in media_unique_ids],
+            "upsert_new_points": adapter.dry_run_upsert(media_collection, media_points),
+        },
     }
     print(json.dumps(plan, ensure_ascii=False, indent=2))
 
@@ -231,6 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
     qdrant = sub.add_parser("dry-run-qdrant", help="Print Qdrant upsert plan from ADS vector rows.")
     qdrant.add_argument("--layers-dir", required=True)
     qdrant.add_argument("--collection", default="")
+    qdrant.add_argument("--media-collection", default="")
     qdrant.add_argument("--mock-dimension", type=int, default=8)
     qdrant.set_defaults(func=cmd_dry_run_qdrant)
     return parser

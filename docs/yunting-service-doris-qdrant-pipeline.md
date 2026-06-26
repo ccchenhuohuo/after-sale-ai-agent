@@ -35,6 +35,16 @@ YUNTING_SOURCE=... YUNTING_THIRD_PARTY_ID=... YUNTING_PROJECT_ID=... \
 python scripts/yunting_service_pipeline.py pull-latest-10
 ```
 
+按时间窗拉取完整分页，适合日/周回灌：
+
+```bash
+YUNTING_SOURCE=... YUNTING_THIRD_PARTY_ID=... YUNTING_PROJECT_ID=... \
+python scripts/yunting_service_pipeline.py pull-range \
+  --start-time "2025-06-06 00:00:00" \
+  --end-time "2025-06-07 00:00:00" \
+  --sleep-seconds 0.1
+```
+
 从 raw JSON 生成 Doris/Qdrant 分层 JSONL：
 
 ```bash
@@ -56,6 +66,8 @@ python scripts/yunting_service_pipeline.py dry-run-doris \
 python scripts/yunting_service_pipeline.py dry-run-qdrant \
   --layers-dir data/yunting/service/layers/<run_id>
 ```
+
+`dry-run-qdrant` 输出分为 `text` 和 `media` 两段，分别对应文本 FAQ collection 与媒体 collection。两段都会生成按 `unique_id` 删除旧 point 的计划和新 point upsert 计划；服务器未安装 Qdrant 时不会访问 `localhost:6333`。
 
 ## Doris 分层
 
@@ -114,7 +126,7 @@ python scripts/yunting_service_pipeline.py dry-run-qdrant \
 
 - 同一 `unique_id` 新版本入库前，先按 payload filter 删除旧 point。
 - 新 point_id 由 collection 与 chunk/media id 稳定 hash 生成。
-- ADS 表记录 `sync_status`、`last_synced_at`、`error_message`。
+- ADS 表记录 `sync_status`、`last_synced_at`、`error_message`；pending 状态下 `last_synced_at` 为 `null`。
 
 ## Dagster 交接
 

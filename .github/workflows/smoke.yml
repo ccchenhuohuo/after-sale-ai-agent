@@ -37,3 +37,6 @@ jobs:
 
       - name: Run smoke tests
         run: python -m pytest tests/test_smoke_support_copilot.py -q
+
+      - name: Run Yunting pipeline tests
+        run: python -m pytest tests/test_yunting_service_pipeline.py -q

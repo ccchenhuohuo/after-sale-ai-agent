@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS agent_runtime.ods_api_yunting_service_page_log_d (
   update_time DATETIME,
   dt STRING
 ) DUPLICATE KEY(run_id, page_no)
-PARTITION BY LIST(dt) ()
 DISTRIBUTED BY HASH(run_id) BUCKETS 8
 PROPERTIES ("replication_num" = "1");
 
@@ -344,7 +343,7 @@ CREATE TABLE IF NOT EXISTS agent_runtime.ads_agent_yunting_faq_vector_api_d (
   embedding_text STRING,
   embedding_text_hash STRING,
   sync_status STRING,
-  last_synced_at DATETIME,
+  last_synced_at DATETIME NULL,
   error_message STRING,
   stat_date STRING,
   stat_week STRING,
@@ -365,7 +364,7 @@ CREATE TABLE IF NOT EXISTS agent_runtime.ads_agent_yunting_media_vector_api_d (
   payload_json STRING,
   media_object_key STRING,
   sync_status STRING,
-  last_synced_at DATETIME,
+  last_synced_at DATETIME NULL,
   error_message STRING,
   stat_date STRING,
   stat_week STRING,

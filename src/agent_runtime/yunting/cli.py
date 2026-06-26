@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -393,30 +394,35 @@ def cmd_upsert_qdrant(args: argparse.Namespace) -> None:
     adapter = QdrantAdapter(url=env("QDRANT_URL", "http://localhost:6333"), api_key=env("QDRANT_API_KEY"))
     summary: dict[str, Any] = {"text": {}, "media": {"skipped_points": len(media_rows), "reason": "media_semantic_embedding_not_configured"}}
     if text_rows:
-        vectors: list[list[float]] = []
-        embedding_batches = 0
-        for row_batch in _batches(text_rows, args.batch_size):
-            vectors.extend(provider.embed_texts([row["embedding_text"] for row in row_batch]))
-            embedding_batches += 1
-        text_points = text_points_from_vectors(
-            text_rows,
-            vectors,
-            collection=text_collection,
-            vector_model=args.text_model,
-            vector_dimension=args.text_dimension,
-            backend=provider.backend,
-        )
         summary["text"]["collection"] = adapter.ensure_collection(text_collection, vector_size=args.text_dimension)
         adapter.ensure_keyword_payload_index(text_collection, "unique_id")
         upserted = 0
-        for batch in _batches(text_points, args.batch_size):
-            adapter.upsert(text_collection, batch)
-            upserted += len(batch)
-        data_version_by_unique_id = {
-            point.payload["unique_id"]: point.payload.get("data_version", "")
-            for point in text_points
-            if point.payload.get("unique_id")
-        }
+        embedding_batches = 0
+        data_version_by_unique_id: dict[str, str] = {}
+        for row_batch in _batches(text_rows, args.batch_size):
+            vectors = provider.embed_texts([row["embedding_text"] for row in row_batch])
+            text_points = text_points_from_vectors(
+                row_batch,
+                vectors,
+                collection=text_collection,
+                vector_model=args.text_model,
+                vector_dimension=args.text_dimension,
+                backend=provider.backend,
+            )
+            adapter.upsert(text_collection, text_points)
+            upserted += len(text_points)
+            embedding_batches += 1
+            for point in text_points:
+                unique_id = point.payload.get("unique_id")
+                data_version = point.payload.get("data_version", "")
+                if unique_id and data_version:
+                    data_version_by_unique_id[unique_id] = data_version
+            if embedding_batches == 1 or embedding_batches % 10 == 0 or upserted == len(text_rows):
+                print(
+                    f"upsert-qdrant progress: {upserted}/{len(text_rows)} text points across {embedding_batches} embedding batches",
+                    file=sys.stderr,
+                    flush=True,
+                )
         for unique_id, data_version in sorted(data_version_by_unique_id.items()):
             if data_version:
                 adapter.delete_stale_by_unique_id(text_collection, unique_id, data_version)

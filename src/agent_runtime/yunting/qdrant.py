@@ -100,12 +100,22 @@ def text_points_from_vectors(
 
 
 class OpenAICompatibleEmbeddingProvider:
-    def __init__(self, *, api_key: str, base_url: str, model: str, dimension: int, backend: str = "openai-compatible") -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        base_url: str,
+        model: str,
+        dimension: int,
+        backend: str = "openai-compatible",
+        timeout_seconds: float = 60.0,
+    ) -> None:
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
         self.dimension = dimension
         self.backend = backend
+        self.timeout_seconds = timeout_seconds
 
     @classmethod
     def from_env(cls) -> "OpenAICompatibleEmbeddingProvider":
@@ -120,14 +130,22 @@ class OpenAICompatibleEmbeddingProvider:
         model = os.getenv("YUNTING_TEXT_EMBEDDING_MODEL", "text-embedding-v4")
         dimension = int(os.getenv("YUNTING_TEXT_EMBEDDING_DIMENSION", "768"))
         backend = os.getenv("YUNTING_TEXT_EMBEDDING_BACKEND", "openai-compatible")
+        timeout_seconds = float(os.getenv("YUNTING_TEXT_EMBEDDING_TIMEOUT_SECONDS", "60"))
         if not api_key or not base_url:
             raise RuntimeError("Configure YUNTING_TEXT_EMBEDDING_API_KEY and YUNTING_TEXT_EMBEDDING_BASE_URL for production Qdrant upsert.")
-        return cls(api_key=api_key, base_url=base_url, model=model, dimension=dimension, backend=backend)
+        return cls(
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            dimension=dimension,
+            backend=backend,
+            timeout_seconds=timeout_seconds,
+        )
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         from openai import OpenAI
 
-        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        client = OpenAI(api_key=self.api_key, base_url=self.base_url, timeout=self.timeout_seconds)
         response = client.embeddings.create(model=self.model, input=texts)
         vectors = [list(item.embedding) for item in response.data]
         for vector in vectors:

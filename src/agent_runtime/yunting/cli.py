@@ -393,7 +393,11 @@ def cmd_upsert_qdrant(args: argparse.Namespace) -> None:
     adapter = QdrantAdapter(url=env("QDRANT_URL", "http://localhost:6333"), api_key=env("QDRANT_API_KEY"))
     summary: dict[str, Any] = {"text": {}, "media": {"skipped_points": len(media_rows), "reason": "media_semantic_embedding_not_configured"}}
     if text_rows:
-        vectors = provider.embed_texts([row["embedding_text"] for row in text_rows])
+        vectors: list[list[float]] = []
+        embedding_batches = 0
+        for row_batch in _batches(text_rows, args.batch_size):
+            vectors.extend(provider.embed_texts([row["embedding_text"] for row in row_batch]))
+            embedding_batches += 1
         text_points = text_points_from_vectors(
             text_rows,
             vectors,
@@ -427,6 +431,7 @@ def cmd_upsert_qdrant(args: argparse.Namespace) -> None:
         summary["text"].update(
             {
                 "upserted_points": upserted,
+                "embedding_batches": embedding_batches,
                 "stale_cleanup_unique_ids": len(data_version_by_unique_id),
                 "doris_writeback": bool(writeback) if not args.skip_doris_writeback else "skipped",
             }

@@ -44,6 +44,111 @@ GREETING_REJECTS = {
     "欢迎光临",
 }
 
+CUSTOMER_WATER_TEXTS = {
+    "好",
+    "好的",
+    "可以",
+    "嗯",
+    "恩",
+    "哦",
+    "是",
+    "是的",
+    "不是",
+    "对",
+    "不对",
+    "没问题",
+    "谢谢",
+    "感谢",
+    "收到",
+    "ok",
+    "OK",
+}
+
+CUSTOMER_QUESTION_MARKERS = (
+    "?",
+    "？",
+    "怎么",
+    "如何",
+    "多久",
+    "多少",
+    "能否",
+    "怎么办",
+    "为什么",
+    "是否",
+    "啥",
+    "吗",
+    "可不可以",
+    "能不能",
+)
+
+CUSTOMER_PROBLEM_MARKERS = (
+    "充不",
+    "不充",
+    "开不了",
+    "打不开",
+    "不能",
+    "无法",
+    "没法",
+    "不能开",
+    "不能用",
+    "不行",
+    "用不了",
+    "连不上",
+    "连接不上",
+    "不匹配",
+    "不支持",
+    "配对不上",
+    "没反应",
+    "没声音",
+    "不亮",
+    "不响",
+    "不工作",
+    "失灵",
+    "异常",
+    "故障",
+    "坏",
+    "损坏",
+    "破损",
+    "裂",
+    "少件",
+    "少发",
+    "缺件",
+    "缺了",
+    "发错",
+    "错发",
+    "漏发",
+    "收不到",
+    "没收到",
+    "断了",
+    "卡住",
+    "黑屏",
+    "花屏",
+    "闪退",
+    "报错",
+    "续航短",
+    "耗电快",
+    "发热",
+    "显示不了",
+    "识别不了",
+)
+
+CUSTOMER_REQUEST_MARKERS = (
+    "退货",
+    "退款",
+    "换货",
+    "换一个",
+    "维修",
+    "返修",
+    "保修",
+    "补发",
+    "重发",
+    "寄回",
+    "发票",
+    "安装不了",
+    "设置不了",
+    "校准",
+)
+
 NON_ANSWER_PATTERNS = (
     "转人工",
     "人工客服",
@@ -87,6 +192,9 @@ class PipelineManifest:
     faq_case_count: int
     faq_chunk_count: int
     table_row_counts: dict[str, int]
+    missing_unique_count: int = 0
+    duplicate_page_token_count: int = 0
+    empty_page_guard_triggered: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -97,6 +205,9 @@ class PipelineManifest:
             "faq_case_count": self.faq_case_count,
             "faq_chunk_count": self.faq_chunk_count,
             "table_row_counts": self.table_row_counts,
+            "missing_unique_count": self.missing_unique_count,
+            "duplicate_page_token_count": self.duplicate_page_token_count,
+            "empty_page_guard_triggered": self.empty_page_guard_triggered,
         }
 
 
@@ -163,7 +274,7 @@ def _parse_json_value(value: Any, default: Any) -> Any:
 def _message_sort_key(message: dict[str, Any]) -> tuple[str, str]:
     publish_time = normalize_time(first_present(message, "publishTime", "publish_time", default=""))
     content_id = clean_text(first_present(message, "contentId", "content_id", "id"))
-    return publish_time, content_id
+    return publish_time or "", content_id
 
 
 def _normalize_role(value: Any) -> str:
@@ -213,13 +324,20 @@ def tag_names(session: dict[str, Any]) -> list[str]:
 
 def _message_row(session: dict[str, Any], message: dict[str, Any], index: int, run_ts: str) -> dict[str, Any]:
     unique_id = session_unique_id(session)
-    content_id = clean_text(first_present(message, "contentId", "content_id", "id")) or f"{unique_id}:{index}"
+    raw_content_id = clean_text(first_present(message, "contentId", "content_id", "id"))
     publish_time = normalize_time(first_present(message, "publishTime", "publish_time", default=first_present(session, "publishTime", "publish_time")))
     message_type = _normalize_message_type(first_present(message, "messageType", "message_type", "type"))
     role = _normalize_role(first_present(message, "role", "senderRole", default=""))
     content = clean_text(first_present(message, "content", "text", "contentText"))
+    fallback_content_id = stable_id(unique_id, publish_time or "", role, message_type, content)
+    content_id = raw_content_id or fallback_content_id
+    message_pk = (
+        stable_id("message", unique_id, content_id)
+        if raw_content_id
+        else stable_id("message", unique_id, publish_time or "", role, message_type, content)
+    )
     return {
-        "message_pk": stable_id(unique_id, content_id, index),
+        "message_pk": message_pk,
         "content_id": content_id,
         "unique_id": unique_id,
         "message_index": index,
@@ -280,7 +398,39 @@ def _is_customer_question(text: str) -> bool:
     stripped = clean_text(text)
     if len(stripped) < 4:
         return False
-    return any(marker in stripped for marker in ("?", "？", "怎么", "如何", "多久", "多少", "能否", "可以", "怎么办", "为什么", "是否", "啥", "吗"))
+    if _is_customer_water_text(stripped):
+        return False
+    return any(marker in stripped for marker in CUSTOMER_QUESTION_MARKERS)
+
+
+def _is_customer_water_text(text: str) -> bool:
+    stripped = clean_text(text)
+    if len(stripped) < 2:
+        return True
+    return stripped in CUSTOMER_WATER_TEXTS
+
+
+def _is_customer_support_request(text: str) -> bool:
+    stripped = clean_text(text)
+    if len(stripped) < 4:
+        return False
+    if _is_customer_water_text(stripped):
+        return False
+    if _is_customer_question(stripped):
+        return True
+    return any(marker in stripped for marker in CUSTOMER_PROBLEM_MARKERS + CUSTOMER_REQUEST_MARKERS)
+
+
+def _customer_context_text(messages: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for message in messages:
+        if message.get("message_type") in {"IMAGE", "VIDEO"}:
+            parts.append(f"客户发送{message['message_type']}媒体资料")
+            continue
+        text = clean_text(message.get("content_text", ""))
+        if text:
+            parts.append(text)
+    return " / ".join(parts)
 
 
 def _is_evidence_customer_message(message: dict[str, Any]) -> bool:
@@ -288,7 +438,49 @@ def _is_evidence_customer_message(message: dict[str, Any]) -> bool:
         return False
     if message["message_type"] in {"IMAGE", "VIDEO"}:
         return True
-    return message["message_type"] == "TEXT" and _is_customer_question(message["content_text"])
+    return message["message_type"] == "TEXT" and _is_customer_support_request(message["content_text"])
+
+
+def _is_rag_message(message: dict[str, Any]) -> bool:
+    if message["role"] == "CUSTOMER":
+        return _is_evidence_customer_message(message)
+    if message["role"] == "SERVER" and message["message_type"] == "TEXT":
+        return _is_substantial_answer(message["content_text"])
+    return False
+
+
+def _answer_unit_pairs(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    pairs: list[dict[str, Any]] = []
+    customer_context: list[dict[str, Any]] = []
+    context_answered = False
+    for message in messages:
+        if _is_evidence_customer_message(message):
+            if context_answered:
+                customer_context = []
+                context_answered = False
+            customer_context.append(message)
+            customer_context = customer_context[-3:]
+            continue
+        if (
+            message["role"] == "SERVER"
+            and message["message_type"] == "TEXT"
+            and _is_substantial_answer(message["content_text"])
+        ):
+            if not customer_context:
+                continue
+            question = _customer_context_text(customer_context)
+            if not question:
+                continue
+            pairs.append(
+                {
+                    "question": question,
+                    "answer": message["content_text"],
+                    "source_content_ids": [context_message["content_id"] for context_message in customer_context]
+                    + [message["content_id"]],
+                }
+            )
+            context_answered = True
+    return pairs
 
 
 def _authority_fields() -> dict[str, Any]:
@@ -316,22 +508,38 @@ def _build_faq_rows(
     stat_week = stat_week_from(std_session["session_start_time"] or messages[0].get("publish_time"))
     topics = topic_values(session)
     tags = tag_names(session)
-    customer_texts = [m["content_text"] for m in messages if m["role"] == "CUSTOMER" and m["message_type"] == "TEXT" and m["content_text"]]
-    evidence_customer_messages = [m for m in messages if _is_evidence_customer_message(m)]
-    server_texts = [m["content_text"] for m in messages if m["role"] == "SERVER" and m["message_type"] == "TEXT" and _is_substantial_answer(m["content_text"])]
-    if not server_texts or not evidence_customer_messages:
+    answer_pairs = _answer_unit_pairs(messages)
+    if not answer_pairs:
         return [], [], []
+    answer_source_content_ids = {
+        content_id
+        for pair in answer_pairs
+        for content_id in pair["source_content_ids"]
+    }
+    paired_customer_content_ids = {
+        message["content_id"]
+        for message in messages
+        if message["role"] == "CUSTOMER"
+        if message["content_id"] in answer_source_content_ids
+    }
+    evidence_customer_messages = [
+        message
+        for message in messages
+        if message["content_id"] in paired_customer_content_ids and _is_evidence_customer_message(message)
+    ]
+    customer_question_summary = _customer_context_text(evidence_customer_messages)
+    server_texts = [pair["answer"] for pair in answer_pairs]
 
     case_id = stable_id("case", unique_id)
-    title = clean_text(first_present(session, "title", default="")) or (customer_texts[0][:80] if customer_texts else unique_id)
+    title = clean_text(first_present(session, "title", default="")) or (customer_question_summary[:80] if customer_question_summary else unique_id)
     authority = _authority_fields()
     case = {
         "case_id": case_id,
         "unique_id": unique_id,
         "case_title": title,
-        "customer_question_summary": " / ".join(customer_texts[:3]),
+        "customer_question_summary": customer_question_summary,
         "answer_summary": " / ".join(server_texts[:3]),
-        "symptom_summary": customer_texts[0] if customer_texts else "",
+        "symptom_summary": customer_question_summary,
         "resolution_summary": server_texts[-1],
         "product_summary": " / ".join(topics.get("品名", []) + topics.get("型号", []) + topics.get("SKU", [])),
         "brand_json": json_array(topics.get("品牌", [])),
@@ -380,7 +588,7 @@ def _build_faq_rows(
     rag_messages = [
         message
         for message in messages
-        if not (message["role"] == "SERVER" and message["message_type"] == "TEXT" and not _is_substantial_answer(message["content_text"]))
+        if _is_rag_message(message)
     ]
     timeline = "\n".join(
         f"{m['message_index']}. {m['publish_time']} {m['role']} {m['message_type']}: {m['content_text']}"
@@ -391,17 +599,9 @@ def _build_faq_rows(
     add_chunk("conversation_timeline", timeline, ids=[m["content_id"] for m in rag_messages])
     add_chunk("conversation_window", "\n".join(timeline.splitlines()[:12]), ids=[m["content_id"] for m in rag_messages[:12]])
 
-    last_customer: dict[str, Any] | None = None
-    for message in messages:
-        if _is_evidence_customer_message(message):
-            last_customer = message
-        elif message["role"] == "SERVER" and message["message_type"] == "TEXT" and _is_substantial_answer(message["content_text"]):
-            question = last_customer["content_text"] if last_customer and last_customer["message_type"] == "TEXT" else case["customer_question_summary"]
-            text = f"客户问题：{question}\n客服回答：{message['content_text']}"
-            ids = [message["content_id"]]
-            if last_customer:
-                ids.insert(0, last_customer["content_id"])
-            add_chunk("answer_unit", text, question=question, answer=message["content_text"], ids=ids)
+    for pair in answer_pairs:
+        text = f"客户问题：{pair['question']}\n客服回答：{pair['answer']}"
+        add_chunk("answer_unit", text, question=pair["question"], answer=pair["answer"], ids=pair["source_content_ids"])
 
     media_observations = [
         {
@@ -438,6 +638,14 @@ def build_yunting_layers(
     run_ts = now_ts()
     layers = empty_layers()
     page_payloads = page_payloads or []
+    missing_unique_count = sum(1 for session in sessions if not session_unique_id(session))
+    page_tokens = [
+        clean_text(payload.get("result", {}).get("pageToken", ""))
+        for payload in page_payloads
+        if isinstance(payload, dict) and isinstance(payload.get("result"), dict)
+    ]
+    non_empty_page_tokens = [token for token in page_tokens if token]
+    duplicate_page_token_count = len(non_empty_page_tokens) - len(set(non_empty_page_tokens))
 
     for page_no, payload in enumerate(page_payloads, start=1):
         result = payload.get("result", {}) if isinstance(payload, dict) else {}
@@ -593,6 +801,9 @@ def build_yunting_layers(
         faq_case_count=len(layers["dws_yunting_service_faq_case_d"]),
         faq_chunk_count=len(layers["dws_yunting_service_faq_chunk_d"]),
         table_row_counts={table: len(rows) for table, rows in layers.items()},
+        missing_unique_count=missing_unique_count,
+        duplicate_page_token_count=duplicate_page_token_count,
+        empty_page_guard_triggered=False,
     )
     return layers, manifest
 
@@ -607,6 +818,8 @@ def _build_ads_and_dm(
 ) -> None:
     for chunk in layers["dws_yunting_service_faq_chunk_d"]:
         payload = {
+            "run_id": run_id,
+            "data_version": run_id,
             "chunk_id": chunk["chunk_id"],
             "case_id": chunk["case_id"],
             "unique_id": chunk["unique_id"],
@@ -648,6 +861,8 @@ def _build_ads_and_dm(
     }
     for media in layers["dws_yunting_service_media_observation_d"]:
         payload = {
+            "run_id": run_id,
+            "data_version": run_id,
             "media_chunk_id": media["media_chunk_id"],
             "asset_id": media["asset_id"],
             "unique_id": media["unique_id"],
@@ -670,7 +885,7 @@ def _build_ads_and_dm(
                 "vector_dimension": 1024,
                 "payload_json": compact_json(payload),
                 "media_object_key": media_object_keys.get(media["asset_id"], ""),
-                "sync_status": "pending",
+                "sync_status": "skipped_no_semantic_vector",
                 "last_synced_at": None,
                 "error_message": "",
                 "stat_date": media["stat_date"],

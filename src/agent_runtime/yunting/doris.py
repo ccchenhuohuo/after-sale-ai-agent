@@ -102,7 +102,14 @@ class DorisStreamLoadAdapter:
                 status = str(result.get("Status", ""))
                 filtered_rows = int(result.get("NumberFilteredRows", 0) or 0)
                 loaded_rows = int(result.get("NumberLoadedRows", 0) or 0)
-                if status != "Success" or filtered_rows != 0 or loaded_rows != len(rows):
+                existing_job_status = str(result.get("ExistingJobStatus", ""))
+                if status == "Label Already Exists" and existing_job_status.upper() == "FINISHED":
+                    return {**result, "IdempotentSuccess": True}
+                if status == "Publish Timeout":
+                    raise RuntimeError(f"Doris Stream Load publish timeout for {table_name}; label state check required: {json.dumps(result, ensure_ascii=False)}")
+                if filtered_rows != 0:
+                    raise RuntimeError(f"Doris Stream Load filtered rows for {table_name}: {json.dumps(result, ensure_ascii=False)}")
+                if status != "Success" or loaded_rows != len(rows):
                     raise RuntimeError(f"Doris Stream Load rejected rows for {table_name}: {json.dumps(result, ensure_ascii=False)}")
                 return result
             except Exception as exc:  # pragma: no cover - network fallback path

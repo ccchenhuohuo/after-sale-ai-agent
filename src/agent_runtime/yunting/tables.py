@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -6,6 +6,9 @@ class TableSpec:
     name: str
     layer: str
     columns: tuple[str, ...]
+    key_type: str = "UNIQUE"
+    key_columns: tuple[str, ...] = ()
+    partition_column: str = ""
 
 
 DORIS_TABLES: dict[str, TableSpec] = {
@@ -203,7 +206,7 @@ DORIS_TABLES: dict[str, TableSpec] = {
     "dim_yunting_topic_value": TableSpec(
         "dim_yunting_topic_value",
         "dim",
-        ("unique_id", "topic_name", "topic_value", "topic_value_hash", "source_system", "create_time", "update_time", "dt"),
+        ("unique_id", "topic_name", "topic_value_hash", "topic_value", "source_system", "create_time", "update_time", "dt"),
     ),
     "dim_yunting_tag": TableSpec(
         "dim_yunting_tag",
@@ -351,8 +354,8 @@ DORIS_TABLES: dict[str, TableSpec] = {
         "ads",
         (
             "stat_date",
-            "stat_week",
             "run_id",
+            "stat_week",
             "api_page_count",
             "raw_session_count",
             "std_session_count",
@@ -373,12 +376,12 @@ DORIS_TABLES: dict[str, TableSpec] = {
         (
             "stat_date",
             "stat_week",
+            "source_type",
             "session_count",
             "valid_case_count",
             "message_count",
             "customer_message_count",
             "server_message_count",
-            "source_type",
             "reference_class",
             "authority_level",
             "create_time",
@@ -391,11 +394,11 @@ DORIS_TABLES: dict[str, TableSpec] = {
         (
             "stat_date",
             "stat_week",
+            "source_type",
             "topic_value_count",
             "tag_count",
             "faq_count",
             "media_evidence_count",
-            "source_type",
             "create_time",
             "update_time",
         ),
@@ -406,13 +409,13 @@ DORIS_TABLES: dict[str, TableSpec] = {
         (
             "stat_date",
             "stat_week",
+            "source_type",
             "image_count",
             "video_count",
             "download_success_count",
             "ocr_success_count",
             "visual_summary_success_count",
             "media_upsert_success_count",
-            "source_type",
             "create_time",
             "update_time",
         ),
@@ -421,3 +424,44 @@ DORIS_TABLES: dict[str, TableSpec] = {
 
 
 LAYER_ORDER = ("ods", "std", "dwd", "dim", "dws", "ads", "dm")
+
+
+TABLE_KEY_COLUMNS: dict[str, tuple[str, ...]] = {
+    "ods_api_yunting_service_page_log_d": ("run_id", "page_no"),
+    "ods_api_yunting_service_session_raw_f_d": ("unique_id",),
+    "std_api_yunting_service_session_f_d": ("unique_id",),
+    "std_api_yunting_service_message_f_d": ("message_pk",),
+    "std_api_yunting_service_media_asset_f_d": ("asset_id",),
+    "dwd_api_yunting_service_session_f_d": ("unique_id",),
+    "dwd_api_yunting_service_message_f_d": ("message_pk",),
+    "dwd_api_yunting_service_media_asset_f_d": ("asset_id",),
+    "dim_yunting_topic_value": ("unique_id", "topic_name", "topic_value_hash"),
+    "dim_yunting_tag": ("unique_id", "tag_name"),
+    "dim_yunting_service_enum": ("enum_type", "enum_code"),
+    "dws_yunting_service_faq_case_d": ("case_id",),
+    "dws_yunting_service_faq_chunk_d": ("chunk_id",),
+    "dws_yunting_service_media_observation_d": ("media_chunk_id",),
+    "ads_agent_yunting_faq_vector_api_d": ("point_id",),
+    "ads_agent_yunting_media_vector_api_d": ("point_id",),
+    "ads_agent_yunting_pipeline_dashboard_d": ("stat_date", "run_id"),
+    "dm_yunting_service_quality_d": ("stat_date", "stat_week", "source_type"),
+    "dm_yunting_service_product_tag_d": ("stat_date", "stat_week", "source_type"),
+    "dm_yunting_service_media_d": ("stat_date", "stat_week", "source_type"),
+}
+
+
+TABLE_PARTITION_COLUMNS: dict[str, str] = {
+    table_name: ("dt" if spec.layer in {"ods", "std", "dwd", "dim"} else "stat_date")
+    for table_name, spec in DORIS_TABLES.items()
+}
+
+
+DORIS_TABLES = {
+    table_name: replace(
+        spec,
+        key_type="UNIQUE",
+        key_columns=TABLE_KEY_COLUMNS[table_name],
+        partition_column=TABLE_PARTITION_COLUMNS[table_name],
+    )
+    for table_name, spec in DORIS_TABLES.items()
+}

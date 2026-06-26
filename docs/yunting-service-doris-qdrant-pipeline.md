@@ -31,19 +31,19 @@
 拉取最新 10 条真实云听客服会话：
 
 ```bash
-YUNTING_SOURCE=... YUNTING_THIRD_PARTY_ID=... YUNTING_PROJECT_ID=... \
 python scripts/yunting_service_pipeline.py pull-latest-10
 ```
 
 按时间窗拉取完整分页，适合日/周回灌：
 
 ```bash
-YUNTING_SOURCE=... YUNTING_THIRD_PARTY_ID=... YUNTING_PROJECT_ID=... \
 python scripts/yunting_service_pipeline.py pull-range \
   --start-time "2025-06-06 00:00:00" \
   --end-time "2025-06-07 00:00:00" \
   --sleep-seconds 0.1
 ```
+
+真实凭据写入本地 `.env` 或服务器环境变量，不要直接拼在命令行里。若覆盖 `--data-root`、`--input-dir` 或 `--output-dir`，必须先确认目标路径已被 `.gitignore` 覆盖，避免真实 raw、layers、media URL 或 manifest 进入 Git。
 
 从 raw JSON 生成 Doris/Qdrant 分层 JSONL：
 
@@ -69,15 +69,15 @@ python scripts/yunting_service_pipeline.py dry-run-qdrant \
 
 `dry-run-qdrant` 输出分为 `text` 和 `media` 两段，分别对应文本 FAQ collection 与媒体 collection。两段都会生成按 `unique_id` 删除旧 point 的计划和新 point upsert 计划；服务器未安装 Qdrant 时不会访问 `localhost:6333`。
 
-服务器安装 Qdrant 后，可执行真实 dev collection upsert：
+服务器安装 Qdrant 后，dev collection 可用于链路验证。mock vector 只能通过 `mock-upsert-qdrant-dev` 写入 `_dev` collection，不得写入生产 collection；生产 `upsert-qdrant` 必须配置真实 embedding provider。
 
 ```bash
-python scripts/yunting_service_pipeline.py upsert-qdrant \
+python scripts/yunting_service_pipeline.py mock-upsert-qdrant-dev \
   --layers-dir data/yunting/service/layers/<run_id> \
   --batch-size 256
 ```
 
-当前命令使用确定性 mock vector 验证 Qdrant collection、delete、upsert 链路：文本维度默认 768，媒体维度默认 1024。接入真实 embedding 服务后，只替换 point vector 生成逻辑，不改变 Doris ADS 表和 Qdrant payload 结构。
+mock 命令仅验证 Qdrant collection、delete、upsert 链路：文本维度默认 768，媒体维度默认 1024。生产 upsert 会校验 ADS `vector_model`、`vector_dimension`、collection schema 与实际向量一致，并在未配置真实 embedding provider 时失败。
 
 ## Doris 分层
 
@@ -114,7 +114,7 @@ python scripts/yunting_service_pipeline.py upsert-qdrant \
 
 ## Qdrant 设计
 
-服务器尚未安装 Qdrant，因此仓库先交付 mock/dry-run adapter 和 collection 设计。
+服务器已安装 Qdrant，仓库当前交付 mock/dry-run adapter 和 collection 设计。dev collection 可验证写入链路；生产 collection 必须等待真实 embedding 和上线整改完成后再启用。
 
 文本 collection：
 
@@ -134,9 +134,9 @@ python scripts/yunting_service_pipeline.py upsert-qdrant \
 
 重跑策略：
 
-- 同一 `unique_id` 新版本入库前，先按 payload filter 删除旧 point。
+- 同一 `unique_id` 新版本先 upsert，再按 `unique_id + data_version` 清理旧 point。
 - 新 point_id 由 collection 与 chunk/media id 生成稳定 UUID，满足 Qdrant point id 要求。
-- ADS 表记录 `sync_status`、`last_synced_at`、`error_message`；pending 状态下 `last_synced_at` 为 `null`。
+- ADS 表记录 `sync_status`、`last_synced_at`、`error_message`；pending 状态下 `last_synced_at` 为 `null`。媒体在没有 OCR/视觉摘要/多模态 embedding 前标记为 `skipped_no_semantic_vector`。
 
 ## Dagster 交接
 
@@ -146,6 +146,33 @@ python scripts/yunting_service_pipeline.py upsert-qdrant \
 - Cron：`0 3 * * 1`
 - Timezone：`Asia/Shanghai`
 - 服务器 Dagster asset/op 可直接调用 `scripts/yunting_service_pipeline.py` 或 `agent_runtime.yunting.pipeline`。
+
+服务器 job 的最小命令序列：
+
+```bash
+python scripts/yunting_service_pipeline.py pull-range \
+  --start-time "$WINDOW_START" \
+  --end-time "$WINDOW_END" \
+  --run-id "$RUN_ID"
+
+python scripts/yunting_service_pipeline.py dry-run-layers \
+  --input-dir "data/yunting/service/raw/$RUN_ID/sessions" \
+  --run-id "$RUN_ID"
+
+python scripts/yunting_service_pipeline.py stream-load-doris \
+  --layers-dir "data/yunting/service/layers/$RUN_ID" \
+  --run-id "$RUN_ID"
+
+python scripts/yunting_service_pipeline.py upsert-qdrant \
+  --layers-dir "data/yunting/service/layers/$RUN_ID" \
+  --run-id "$RUN_ID"
+
+python scripts/yunting_service_pipeline.py verify-counts \
+  --layers-dir "data/yunting/service/layers/$RUN_ID" \
+  --check-qdrant
+```
+
+生产 Dagster 中的 Doris 写入 op 可调用 `stream-load-doris` 或直接调用 `DorisStreamLoadAdapter.stream_load()`，两者都必须按 `LAYER_ORDER` 加载 JSONL。上线前先手动 launch 小时间窗，同一窗口重跑两次，确认 manifest、Doris row count、Qdrant point count 一致且不重复，再将 schedule 设为 RUNNING。
 
 ## 验收
 

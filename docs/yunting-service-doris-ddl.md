@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS agent_runtime.ods_api_yunting_service_page_log_d (
   create_time DATETIME,
   update_time DATETIME,
   dt STRING
-) DUPLICATE KEY(run_id, page_no)
+) UNIQUE KEY(run_id, page_no)
+AUTO PARTITION BY LIST (dt) ()
 DISTRIBUTED BY HASH(run_id) BUCKETS 8
 PROPERTIES ("replication_num" = "1");
 
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS agent_runtime.ods_api_yunting_service_session_raw_f_d
   update_time DATETIME,
   dt STRING
 ) UNIQUE KEY(unique_id)
+AUTO PARTITION BY LIST (dt) ()
 DISTRIBUTED BY HASH(unique_id) BUCKETS 16
 PROPERTIES ("replication_num" = "1");
 ```
@@ -75,6 +77,7 @@ CREATE TABLE IF NOT EXISTS agent_runtime.std_api_yunting_service_session_f_d (
   update_time DATETIME,
   dt STRING
 ) UNIQUE KEY(unique_id)
+AUTO PARTITION BY LIST (dt) ()
 DISTRIBUTED BY HASH(unique_id) BUCKETS 16
 PROPERTIES ("replication_num" = "1");
 
@@ -95,6 +98,7 @@ CREATE TABLE IF NOT EXISTS agent_runtime.std_api_yunting_service_message_f_d (
   update_time DATETIME,
   dt STRING
 ) UNIQUE KEY(message_pk)
+AUTO PARTITION BY LIST (dt) ()
 DISTRIBUTED BY HASH(unique_id) BUCKETS 16
 PROPERTIES ("replication_num" = "1");
 
@@ -116,6 +120,7 @@ CREATE TABLE IF NOT EXISTS agent_runtime.std_api_yunting_service_media_asset_f_d
   update_time DATETIME,
   dt STRING
 ) UNIQUE KEY(asset_id)
+AUTO PARTITION BY LIST (dt) ()
 DISTRIBUTED BY HASH(unique_id) BUCKETS 16
 PROPERTIES ("replication_num" = "1");
 ```
@@ -152,6 +157,7 @@ CREATE TABLE IF NOT EXISTS agent_runtime.dwd_api_yunting_service_session_f_d (
   dt STRING,
   source_type STRING
 ) UNIQUE KEY(unique_id)
+AUTO PARTITION BY LIST (dt) ()
 DISTRIBUTED BY HASH(unique_id) BUCKETS 16
 PROPERTIES ("replication_num" = "1");
 
@@ -173,6 +179,7 @@ CREATE TABLE IF NOT EXISTS agent_runtime.dwd_api_yunting_service_message_f_d (
   dt STRING,
   source_type STRING
 ) UNIQUE KEY(message_pk)
+AUTO PARTITION BY LIST (dt) ()
 DISTRIBUTED BY HASH(unique_id) BUCKETS 16
 PROPERTIES ("replication_num" = "1");
 
@@ -195,6 +202,7 @@ CREATE TABLE IF NOT EXISTS agent_runtime.dwd_api_yunting_service_media_asset_f_d
   dt STRING,
   source_type STRING
 ) UNIQUE KEY(asset_id)
+AUTO PARTITION BY LIST (dt) ()
 DISTRIBUTED BY HASH(unique_id) BUCKETS 16
 PROPERTIES ("replication_num" = "1");
 ```
@@ -205,13 +213,14 @@ PROPERTIES ("replication_num" = "1");
 CREATE TABLE IF NOT EXISTS agent_runtime.dim_yunting_topic_value (
   unique_id STRING,
   topic_name STRING,
-  topic_value STRING,
   topic_value_hash STRING,
+  topic_value STRING,
   source_system STRING,
   create_time DATETIME,
   update_time DATETIME,
   dt STRING
-) DUPLICATE KEY(unique_id, topic_name)
+) UNIQUE KEY(unique_id, topic_name, topic_value_hash)
+AUTO PARTITION BY LIST (dt) ()
 DISTRIBUTED BY HASH(unique_id) BUCKETS 16
 PROPERTIES ("replication_num" = "1");
 
@@ -224,7 +233,8 @@ CREATE TABLE IF NOT EXISTS agent_runtime.dim_yunting_tag (
   create_time DATETIME,
   update_time DATETIME,
   dt STRING
-) DUPLICATE KEY(unique_id, tag_name)
+) UNIQUE KEY(unique_id, tag_name)
+AUTO PARTITION BY LIST (dt) ()
 DISTRIBUTED BY HASH(unique_id) BUCKETS 16
 PROPERTIES ("replication_num" = "1");
 
@@ -236,7 +246,8 @@ CREATE TABLE IF NOT EXISTS agent_runtime.dim_yunting_service_enum (
   create_time DATETIME,
   update_time DATETIME,
   dt STRING
-) DUPLICATE KEY(enum_type, enum_code)
+) UNIQUE KEY(enum_type, enum_code)
+AUTO PARTITION BY LIST (dt) ()
 DISTRIBUTED BY HASH(enum_type) BUCKETS 4
 PROPERTIES ("replication_num" = "1");
 ```
@@ -274,6 +285,7 @@ CREATE TABLE IF NOT EXISTS agent_runtime.dws_yunting_service_faq_case_d (
   create_time DATETIME,
   update_time DATETIME
 ) UNIQUE KEY(case_id)
+AUTO PARTITION BY LIST (stat_date) ()
 DISTRIBUTED BY HASH(unique_id) BUCKETS 16
 PROPERTIES ("replication_num" = "1");
 
@@ -299,6 +311,7 @@ CREATE TABLE IF NOT EXISTS agent_runtime.dws_yunting_service_faq_chunk_d (
   create_time DATETIME,
   update_time DATETIME
 ) UNIQUE KEY(chunk_id)
+AUTO PARTITION BY LIST (stat_date) ()
 DISTRIBUTED BY HASH(unique_id) BUCKETS 16
 PROPERTIES ("replication_num" = "1");
 
@@ -323,6 +336,7 @@ CREATE TABLE IF NOT EXISTS agent_runtime.dws_yunting_service_media_observation_d
   create_time DATETIME,
   update_time DATETIME
 ) UNIQUE KEY(media_chunk_id)
+AUTO PARTITION BY LIST (stat_date) ()
 DISTRIBUTED BY HASH(unique_id) BUCKETS 16
 PROPERTIES ("replication_num" = "1");
 ```
@@ -350,6 +364,7 @@ CREATE TABLE IF NOT EXISTS agent_runtime.ads_agent_yunting_faq_vector_api_d (
   create_time DATETIME,
   update_time DATETIME
 ) UNIQUE KEY(point_id)
+AUTO PARTITION BY LIST (stat_date) ()
 DISTRIBUTED BY HASH(unique_id) BUCKETS 16
 PROPERTIES ("replication_num" = "1");
 
@@ -371,13 +386,14 @@ CREATE TABLE IF NOT EXISTS agent_runtime.ads_agent_yunting_media_vector_api_d (
   create_time DATETIME,
   update_time DATETIME
 ) UNIQUE KEY(point_id)
+AUTO PARTITION BY LIST (stat_date) ()
 DISTRIBUTED BY HASH(unique_id) BUCKETS 16
 PROPERTIES ("replication_num" = "1");
 
 CREATE TABLE IF NOT EXISTS agent_runtime.ads_agent_yunting_pipeline_dashboard_d (
   stat_date STRING,
-  stat_week STRING,
   run_id STRING,
+  stat_week STRING,
   api_page_count BIGINT,
   raw_session_count BIGINT,
   std_session_count BIGINT,
@@ -390,7 +406,8 @@ CREATE TABLE IF NOT EXISTS agent_runtime.ads_agent_yunting_pipeline_dashboard_d 
   failed_count BIGINT,
   create_time DATETIME,
   update_time DATETIME
-) DUPLICATE KEY(stat_date, run_id)
+) UNIQUE KEY(stat_date, run_id)
+AUTO PARTITION BY LIST (stat_date) ()
 DISTRIBUTED BY HASH(run_id) BUCKETS 8
 PROPERTIES ("replication_num" = "1");
 ```
@@ -401,47 +418,50 @@ PROPERTIES ("replication_num" = "1");
 CREATE TABLE IF NOT EXISTS agent_runtime.dm_yunting_service_quality_d (
   stat_date STRING,
   stat_week STRING,
+  source_type STRING,
   session_count BIGINT,
   valid_case_count BIGINT,
   message_count BIGINT,
   customer_message_count BIGINT,
   server_message_count BIGINT,
-  source_type STRING,
   reference_class STRING,
   authority_level STRING,
   create_time DATETIME,
   update_time DATETIME
-) DUPLICATE KEY(stat_date, stat_week)
+) UNIQUE KEY(stat_date, stat_week, source_type)
+AUTO PARTITION BY LIST (stat_date) ()
 DISTRIBUTED BY HASH(stat_date) BUCKETS 8
 PROPERTIES ("replication_num" = "1");
 
 CREATE TABLE IF NOT EXISTS agent_runtime.dm_yunting_service_product_tag_d (
   stat_date STRING,
   stat_week STRING,
+  source_type STRING,
   topic_value_count BIGINT,
   tag_count BIGINT,
   faq_count BIGINT,
   media_evidence_count BIGINT,
-  source_type STRING,
   create_time DATETIME,
   update_time DATETIME
-) DUPLICATE KEY(stat_date, stat_week)
+) UNIQUE KEY(stat_date, stat_week, source_type)
+AUTO PARTITION BY LIST (stat_date) ()
 DISTRIBUTED BY HASH(stat_date) BUCKETS 8
 PROPERTIES ("replication_num" = "1");
 
 CREATE TABLE IF NOT EXISTS agent_runtime.dm_yunting_service_media_d (
   stat_date STRING,
   stat_week STRING,
+  source_type STRING,
   image_count BIGINT,
   video_count BIGINT,
   download_success_count BIGINT,
   ocr_success_count BIGINT,
   visual_summary_success_count BIGINT,
   media_upsert_success_count BIGINT,
-  source_type STRING,
   create_time DATETIME,
   update_time DATETIME
-) DUPLICATE KEY(stat_date, stat_week)
+) UNIQUE KEY(stat_date, stat_week, source_type)
+AUTO PARTITION BY LIST (stat_date) ()
 DISTRIBUTED BY HASH(stat_date) BUCKETS 8
 PROPERTIES ("replication_num" = "1");
 ```

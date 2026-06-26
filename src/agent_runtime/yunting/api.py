@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from hashlib import sha256
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -70,11 +71,22 @@ class YuntingClient:
         start_time: str = "",
         end_time: str = "",
         limit: int = 10,
+        max_pages: int = 100,
+        max_empty_pages: int = 2,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         sessions: list[dict[str, Any]] = []
         pages: list[dict[str, Any]] = []
         page_token = ""
+        seen_tokens: set[str] = set()
+        empty_pages = 0
+        page_limit = max_pages if max_pages > 0 else 100
         while len(sessions) < limit:
+            if page_token:
+                if page_token in seen_tokens:
+                    raise RuntimeError(f"Yunting service API repeated pageToken: {page_token}")
+                seen_tokens.add(page_token)
+            if len(pages) >= page_limit:
+                raise RuntimeError(f"Yunting service API exceeded max_pages={page_limit}")
             payload = self.pull_service_page(
                 project_id=project_id,
                 start_time=start_time,
@@ -86,8 +98,14 @@ class YuntingClient:
             data = result.get("data", []) if isinstance(result, dict) else []
             if isinstance(data, list):
                 sessions.extend(item for item in data if isinstance(item, dict))
+                empty_pages = 0 if data else empty_pages + 1
+            else:
+                empty_pages += 1
             has_more = bool(result.get("hasMore")) if isinstance(result, dict) else False
             page_token = str(result.get("pageToken") or "") if isinstance(result, dict) else ""
+            if has_more and empty_pages > max_empty_pages:
+                trace_id = payload.get("traceId", "") if isinstance(payload, dict) else ""
+                raise RuntimeError(f"Yunting service API returned too many empty pages: count={empty_pages}, traceId={trace_id}")
             if not has_more or not page_token:
                 break
         return sessions[:limit], pages
@@ -99,12 +117,22 @@ class YuntingClient:
         start_time: str = "",
         end_time: str = "",
         max_pages: int = 0,
+        max_empty_pages: int = 2,
         sleep_seconds: float = 0.0,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         sessions: list[dict[str, Any]] = []
         pages: list[dict[str, Any]] = []
         page_token = ""
+        seen_tokens: set[str] = set()
+        empty_pages = 0
+        page_limit = max_pages if max_pages > 0 else 1000
         while True:
+            if page_token:
+                if page_token in seen_tokens:
+                    raise RuntimeError(f"Yunting service API repeated pageToken: {page_token}")
+                seen_tokens.add(page_token)
+            if len(pages) >= page_limit:
+                raise RuntimeError(f"Yunting service API exceeded max_pages={page_limit}")
             payload = self.pull_service_page(
                 project_id=project_id,
                 start_time=start_time,
@@ -116,10 +144,14 @@ class YuntingClient:
             data = result.get("data", []) if isinstance(result, dict) else []
             if isinstance(data, list):
                 sessions.extend(item for item in data if isinstance(item, dict))
-            if max_pages and len(pages) >= max_pages:
-                break
+                empty_pages = 0 if data else empty_pages + 1
+            else:
+                empty_pages += 1
             has_more = bool(result.get("hasMore")) if isinstance(result, dict) else False
             page_token = str(result.get("pageToken") or "") if isinstance(result, dict) else ""
+            if has_more and empty_pages > max_empty_pages:
+                trace_id = payload.get("traceId", "") if isinstance(payload, dict) else ""
+                raise RuntimeError(f"Yunting service API returned too many empty pages: count={empty_pages}, traceId={trace_id}")
             if not has_more or not page_token:
                 break
             if sleep_seconds > 0:
@@ -153,8 +185,10 @@ def write_raw_run(root: Path, run_id: str, sessions: list[dict[str, Any]], pages
     session_dir.mkdir(parents=True, exist_ok=True)
     for index, page in enumerate(pages, start=1):
         (api_dir / f"page_{index:04d}.json").write_text(json.dumps(page, ensure_ascii=False, indent=2), encoding="utf-8")
-    for session in sessions:
-        unique_id = str(session.get("unique") or session.get("unique_id") or f"session_{len(sessions)}")
+    for index, session in enumerate(sessions, start=1):
+        raw_text = json.dumps(session, ensure_ascii=False, sort_keys=True)
+        fallback_id = f"session_{index:04d}_{sha256(raw_text.encode('utf-8')).hexdigest()[:12]}"
+        unique_id = str(session.get("unique") or session.get("unique_id") or fallback_id)
         (session_dir / f"{unique_id}.json").write_text(json.dumps(session, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

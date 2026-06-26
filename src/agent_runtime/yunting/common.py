@@ -63,10 +63,10 @@ def first_present(data: dict[str, Any], *names: str, default: Any = "") -> Any:
     return default
 
 
-def normalize_time(value: Any) -> str:
+def normalize_time(value: Any) -> str | None:
     text = clean_text(value)
     if not text:
-        return ""
+        return None
     if text.isdigit():
         raw = int(text)
         if raw > 10_000_000_000:
@@ -77,14 +77,14 @@ def normalize_time(value: Any) -> str:
 
 def stat_date_from(value: Any) -> str:
     text = normalize_time(value)
-    if len(text) >= 10:
+    if text and len(text) >= 10:
         return text[:10].replace("-", "")
     return datetime.now().strftime("%Y%m%d")
 
 
 def stat_week_from(value: Any) -> str:
     text = normalize_time(value)
-    if len(text) >= 10:
+    if text and len(text) >= 10:
         try:
             dt = datetime.strptime(text[:10], "%Y-%m-%d")
             year, week, _ = dt.isocalendar()

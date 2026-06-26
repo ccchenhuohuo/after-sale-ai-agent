@@ -41,6 +41,11 @@ def stable_id(*parts: Any, length: int = 32) -> str:
     return sha256_text(text)[:length]
 
 
+def stable_uuid(*parts: Any) -> str:
+    raw = stable_id(*parts, length=32)
+    return f"{raw[:8]}-{raw[8:12]}-{raw[12:16]}-{raw[16:20]}-{raw[20:]}"
+
+
 def clean_text(value: Any) -> str:
     text = str(value or "").replace("[Invalid text JSON]", "").strip()
     return re.sub(r"\s+", " ", text)

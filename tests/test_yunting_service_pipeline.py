@@ -217,6 +217,50 @@ def test_media_points_from_ads_preserve_payload_and_object_key():
     assert points[0].payload["message_type"] in {"IMAGE", "VIDEO"}
 
 
+def test_qdrant_adapter_real_methods_call_expected_endpoints(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, status_code=200, payload=None):
+            self.status_code = status_code
+            self._payload = payload or {"result": {"status": "completed"}}
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, headers, timeout):
+        calls.append(("GET", url, None))
+        return FakeResponse(status_code=404)
+
+    def fake_put(url, **kwargs):
+        calls.append(("PUT", url, kwargs.get("json")))
+        return FakeResponse()
+
+    def fake_post(url, **kwargs):
+        calls.append(("POST", url, kwargs.get("json")))
+        return FakeResponse()
+
+    monkeypatch.setattr("agent_runtime.yunting.qdrant.httpx.get", fake_get)
+    monkeypatch.setattr("agent_runtime.yunting.qdrant.httpx.put", fake_put)
+    monkeypatch.setattr("agent_runtime.yunting.qdrant.httpx.post", fake_post)
+
+    adapter = QdrantAdapter(url="http://localhost:6333", api_key="secret")
+    adapter.ensure_collection("text_dev", vector_size=768)
+    adapter.delete_by_unique_id("text_dev", "session-1")
+    adapter.upsert("text_dev", [text_points_from_ads([{"point_id": "11111111-1111-1111-1111-111111111111", "payload_json": "{}", "embedding_text": "hello", "embedding_text_hash": "hash"}], mock_dimension=8)[0]])
+
+    assert calls[0] == ("GET", "http://localhost:6333/collections/text_dev", None)
+    assert calls[1][0] == "PUT"
+    assert calls[1][2]["vectors"]["size"] == 768
+    assert calls[2][0] == "POST"
+    assert calls[2][2]["filter"]["must"][0]["key"] == "unique_id"
+    assert calls[3][0] == "PUT"
+    assert calls[3][2]["points"][0]["id"] == "11111111-1111-1111-1111-111111111111"
+
+
 def test_dagster_handoff_module_imports_without_hard_dependency():
     assert dagster_defs.YUNTING_WEEKLY_CRON == "0 3 * * 1"
     assert dagster_defs.YUNTING_EXECUTION_TIMEZONE == "Asia/Shanghai"
@@ -334,6 +378,25 @@ def test_cli_parser_exposes_pull_range():
 
     assert args.func == yunting_cli.cmd_pull_range
     assert args.max_pages == 2
+
+
+def test_cli_parser_exposes_upsert_qdrant():
+    parser = yunting_cli.build_parser()
+
+    args = parser.parse_args(
+        [
+            "upsert-qdrant",
+            "--layers-dir",
+            "data/yunting/service/layers/run",
+            "--batch-size",
+            "100",
+        ]
+    )
+
+    assert args.func == yunting_cli.cmd_upsert_qdrant
+    assert args.text_dimension == 768
+    assert args.media_dimension == 1024
+    assert args.batch_size == 100
 
 
 def test_yunting_token_fetch_uses_source_and_third_party(monkeypatch):

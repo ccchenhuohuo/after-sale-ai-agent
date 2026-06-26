@@ -199,6 +199,48 @@ def cmd_dry_run_qdrant(args: argparse.Namespace) -> None:
     print(json.dumps(plan, ensure_ascii=False, indent=2))
 
 
+def _load_jsonl(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _batches(items: list[Any], size: int) -> list[list[Any]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def cmd_upsert_qdrant(args: argparse.Namespace) -> None:
+    layers_dir = Path(args.layers_dir)
+    text_rows = _load_jsonl(layers_dir / "ads_agent_yunting_faq_vector_api_d.jsonl")
+    media_rows = _load_jsonl(layers_dir / "ads_agent_yunting_media_vector_api_d.jsonl")
+    text_points = text_points_from_ads(text_rows, mock_dimension=args.text_dimension)
+    media_points = media_points_from_ads(media_rows, mock_dimension=args.media_dimension)
+    text_collection = args.collection or env("QDRANT_TEXT_COLLECTION", "yunting_service_text_v1_dev")
+    media_collection = args.media_collection or env("QDRANT_MEDIA_COLLECTION", "yunting_service_media_v1_dev")
+    adapter = QdrantAdapter(url=env("QDRANT_URL", "http://localhost:6333"), api_key=env("QDRANT_API_KEY"))
+
+    summary: dict[str, Any] = {"text": {}, "media": {}}
+    if text_points:
+        summary["text"]["collection"] = adapter.ensure_collection(text_collection, vector_size=args.text_dimension)
+        text_unique_ids = sorted({point.payload["unique_id"] for point in text_points if point.payload.get("unique_id")})
+        for unique_id in text_unique_ids:
+            adapter.delete_by_unique_id(text_collection, unique_id)
+        upserted = 0
+        for batch in _batches(text_points, args.batch_size):
+            adapter.upsert(text_collection, batch)
+            upserted += len(batch)
+        summary["text"].update({"deleted_unique_ids": len(text_unique_ids), "upserted_points": upserted})
+    if media_points:
+        summary["media"]["collection"] = adapter.ensure_collection(media_collection, vector_size=args.media_dimension)
+        media_unique_ids = sorted({point.payload["unique_id"] for point in media_points if point.payload.get("unique_id")})
+        for unique_id in media_unique_ids:
+            adapter.delete_by_unique_id(media_collection, unique_id)
+        upserted = 0
+        for batch in _batches(media_points, args.batch_size):
+            adapter.upsert(media_collection, batch)
+            upserted += len(batch)
+        summary["media"].update({"deleted_unique_ids": len(media_unique_ids), "upserted_points": upserted})
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Yunting service conversation local pipeline.")
     parser.set_defaults(func=None)
@@ -248,6 +290,15 @@ def build_parser() -> argparse.ArgumentParser:
     qdrant.add_argument("--media-collection", default="")
     qdrant.add_argument("--mock-dimension", type=int, default=8)
     qdrant.set_defaults(func=cmd_dry_run_qdrant)
+
+    qdrant_upsert = sub.add_parser("upsert-qdrant", help="Create Qdrant dev collections and upsert ADS vector rows.")
+    qdrant_upsert.add_argument("--layers-dir", required=True)
+    qdrant_upsert.add_argument("--collection", default="")
+    qdrant_upsert.add_argument("--media-collection", default="")
+    qdrant_upsert.add_argument("--text-dimension", type=int, default=768)
+    qdrant_upsert.add_argument("--media-dimension", type=int, default=1024)
+    qdrant_upsert.add_argument("--batch-size", type=int, default=256)
+    qdrant_upsert.set_defaults(func=cmd_upsert_qdrant)
     return parser
 
 

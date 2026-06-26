@@ -24,6 +24,7 @@ from agent_runtime.yunting.common import (
     sha256_text,
     source_url_from_content,
     stable_id,
+    stable_uuid,
     stat_date_from,
     stat_week_from,
 )
@@ -620,7 +621,7 @@ def _build_ads_and_dm(
         }
         layers["ads_agent_yunting_faq_vector_api_d"].append(
             {
-                "point_id": stable_id(text_collection, chunk["chunk_id"]),
+                "point_id": stable_uuid(text_collection, chunk["chunk_id"]),
                 "collection_name": text_collection,
                 "chunk_id": chunk["chunk_id"],
                 "case_id": chunk["case_id"],
@@ -660,7 +661,7 @@ def _build_ads_and_dm(
         }
         layers["ads_agent_yunting_media_vector_api_d"].append(
             {
-                "point_id": stable_id(media_collection, media["media_chunk_id"]),
+                "point_id": stable_uuid(media_collection, media["media_chunk_id"]),
                 "collection_name": media_collection,
                 "media_chunk_id": media["media_chunk_id"],
                 "asset_id": media["asset_id"],

@@ -57,6 +57,32 @@ class QdrantAdapter:
         self.url = url.rstrip("/")
         self.api_key = api_key
 
+    def _headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["api-key"] = self.api_key
+        return headers
+
+    def ensure_collection(self, collection: str, *, vector_size: int, distance: str = "Cosine") -> dict[str, Any]:
+        headers = self._headers()
+        response = httpx.get(f"{self.url}/collections/{collection}", headers=headers, timeout=30)
+        if response.status_code == 200:
+            payload = response.json()
+            current_size = payload.get("result", {}).get("config", {}).get("params", {}).get("vectors", {}).get("size")
+            if current_size is not None and int(current_size) != vector_size:
+                raise RuntimeError(f"Qdrant collection {collection} has vector size {current_size}, expected {vector_size}")
+            return {"collection": collection, "created": False, "vector_size": vector_size}
+        if response.status_code != 404:
+            response.raise_for_status()
+        create = httpx.put(
+            f"{self.url}/collections/{collection}",
+            headers=headers,
+            json={"vectors": {"size": vector_size, "distance": distance}},
+            timeout=120,
+        )
+        create.raise_for_status()
+        return {"collection": collection, "created": True, "vector_size": vector_size, "result": create.json()}
+
     def dry_run_upsert(self, collection: str, points: list[QdrantPoint]) -> dict[str, Any]:
         return {
             "collection": collection,
@@ -74,13 +100,22 @@ class QdrantAdapter:
             "dry_run": True,
         }
 
+    def delete_by_unique_id(self, collection: str, unique_id: str) -> dict[str, Any]:
+        response = httpx.post(
+            f"{self.url}/collections/{collection}/points/delete",
+            params={"wait": "true"},
+            headers=self._headers(),
+            json={"filter": {"must": [{"key": "unique_id", "match": {"value": unique_id}}]}},
+            timeout=120,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def upsert(self, collection: str, points: list[QdrantPoint]) -> dict[str, Any]:
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["api-key"] = self.api_key
         response = httpx.put(
             f"{self.url}/collections/{collection}/points",
-            headers=headers,
+            params={"wait": "true"},
+            headers=self._headers(),
             json={"points": [{"id": point.id, "vector": point.vector, "payload": point.payload} for point in points]},
             timeout=120,
         )

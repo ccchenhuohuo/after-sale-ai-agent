@@ -69,6 +69,16 @@ python scripts/yunting_service_pipeline.py dry-run-qdrant \
 
 `dry-run-qdrant` 输出分为 `text` 和 `media` 两段，分别对应文本 FAQ collection 与媒体 collection。两段都会生成按 `unique_id` 删除旧 point 的计划和新 point upsert 计划；服务器未安装 Qdrant 时不会访问 `localhost:6333`。
 
+服务器安装 Qdrant 后，可执行真实 dev collection upsert：
+
+```bash
+python scripts/yunting_service_pipeline.py upsert-qdrant \
+  --layers-dir data/yunting/service/layers/<run_id> \
+  --batch-size 256
+```
+
+当前命令使用确定性 mock vector 验证 Qdrant collection、delete、upsert 链路：文本维度默认 768，媒体维度默认 1024。接入真实 embedding 服务后，只替换 point vector 生成逻辑，不改变 Doris ADS 表和 Qdrant payload 结构。
+
 ## Doris 分层
 
 数据按部门 ETL 规范单向流转：`ODS -> STD -> DWD -> DIM/DWS -> ADS -> DM`。Doris 是事实源和同步追踪层，Qdrant 命中后必须通过 `chunk_id` 或 `media_chunk_id` 回查 Doris。
@@ -125,7 +135,7 @@ python scripts/yunting_service_pipeline.py dry-run-qdrant \
 重跑策略：
 
 - 同一 `unique_id` 新版本入库前，先按 payload filter 删除旧 point。
-- 新 point_id 由 collection 与 chunk/media id 稳定 hash 生成。
+- 新 point_id 由 collection 与 chunk/media id 生成稳定 UUID，满足 Qdrant point id 要求。
 - ADS 表记录 `sync_status`、`last_synced_at`、`error_message`；pending 状态下 `last_synced_at` 为 `null`。
 
 ## Dagster 交接

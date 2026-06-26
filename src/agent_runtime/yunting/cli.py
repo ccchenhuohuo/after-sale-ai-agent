@@ -522,7 +522,7 @@ def build_parser() -> argparse.ArgumentParser:
     qdrant_upsert.add_argument("--run-id", default="")
     qdrant_upsert.add_argument("--text-model", default=env("YUNTING_TEXT_EMBEDDING_MODEL", "text-embedding-v4"))
     qdrant_upsert.add_argument("--text-dimension", type=int, default=768)
-    qdrant_upsert.add_argument("--batch-size", type=int, default=20)
+    qdrant_upsert.add_argument("--batch-size", type=int, default=10)
     qdrant_upsert.add_argument("--skip-doris-writeback", action="store_true")
     qdrant_upsert.set_defaults(func=cmd_upsert_qdrant)
     return parser

@@ -203,6 +203,62 @@ def test_yunting_client_rejects_business_error(monkeypatch):
         raise AssertionError("expected business-code failure")
 
 
+def test_yunting_client_pull_service_pages_follows_page_token(monkeypatch):
+    calls = []
+    client = YuntingClient(base_url="https://opendata.yuntingai.com", access_token="test-token")
+
+    def fake_page(*, project_id, start_time="", end_time="", page_token=""):
+        calls.append(page_token)
+        if not page_token:
+            return {
+                "code": 20000,
+                "result": {
+                    "data": [{"unique": "s1"}],
+                    "hasMore": True,
+                    "pageToken": "next-token",
+                },
+            }
+        return {
+            "code": 20000,
+            "result": {
+                "data": [{"unique": "s2"}],
+                "hasMore": False,
+                "pageToken": "",
+            },
+        }
+
+    monkeypatch.setattr(client, "pull_service_page", fake_page)
+
+    sessions, pages = client.pull_service_pages(
+        project_id="project",
+        start_time="2025-06-06 00:00:00",
+        end_time="2025-06-07 00:00:00",
+    )
+
+    assert calls == ["", "next-token"]
+    assert [session["unique"] for session in sessions] == ["s1", "s2"]
+    assert len(pages) == 2
+
+
+def test_cli_parser_exposes_pull_range():
+    parser = yunting_cli.build_parser()
+
+    args = parser.parse_args(
+        [
+            "pull-range",
+            "--start-time",
+            "2025-06-06 00:00:00",
+            "--end-time",
+            "2025-06-07 00:00:00",
+            "--max-pages",
+            "2",
+        ]
+    )
+
+    assert args.func == yunting_cli.cmd_pull_range
+    assert args.max_pages == 2
+
+
 def test_yunting_token_fetch_uses_source_and_third_party(monkeypatch):
     class Response:
         def raise_for_status(self):

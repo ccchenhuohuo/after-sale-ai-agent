@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -90,6 +91,40 @@ class YuntingClient:
             if not has_more or not page_token:
                 break
         return sessions[:limit], pages
+
+    def pull_service_pages(
+        self,
+        *,
+        project_id: str,
+        start_time: str = "",
+        end_time: str = "",
+        max_pages: int = 0,
+        sleep_seconds: float = 0.0,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        sessions: list[dict[str, Any]] = []
+        pages: list[dict[str, Any]] = []
+        page_token = ""
+        while True:
+            payload = self.pull_service_page(
+                project_id=project_id,
+                start_time=start_time,
+                end_time=end_time,
+                page_token=page_token,
+            )
+            pages.append(payload)
+            result = payload.get("result", {}) if isinstance(payload, dict) else {}
+            data = result.get("data", []) if isinstance(result, dict) else []
+            if isinstance(data, list):
+                sessions.extend(item for item in data if isinstance(item, dict))
+            if max_pages and len(pages) >= max_pages:
+                break
+            has_more = bool(result.get("hasMore")) if isinstance(result, dict) else False
+            page_token = str(result.get("pageToken") or "") if isinstance(result, dict) else ""
+            if not has_more or not page_token:
+                break
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
+        return sessions, pages
 
 
 def fetch_access_token(*, base_url: str, source: str, third_party_id: str, timeout_seconds: float = 60.0) -> str:

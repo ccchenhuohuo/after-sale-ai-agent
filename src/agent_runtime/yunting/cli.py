@@ -23,23 +23,26 @@ def run_id() -> str:
     return "yt_" + datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def cmd_pull_latest_10(args: argparse.Namespace) -> None:
-    start_time, end_time = (args.start_time, args.end_time) if args.start_time and args.end_time else default_time_window(args.days)
+def _build_yunting_client(args: argparse.Namespace) -> YuntingClient:
     base_url = args.base_url or env("YUNTING_API_BASE_URL", "https://opendata.yuntingai.com")
     access_token = env("YUNTING_ACCESS_TOKEN")
     if access_token:
-        client = YuntingClient(base_url=base_url, access_token=access_token, timeout_seconds=args.timeout_seconds)
-    else:
-        source = env("YUNTING_SOURCE")
-        third_party_id = env("YUNTING_THIRD_PARTY_ID")
-        if not source or not third_party_id:
-            raise SystemExit("Set YUNTING_ACCESS_TOKEN or both YUNTING_SOURCE and YUNTING_THIRD_PARTY_ID.")
-        client = YuntingClient.from_source(
-            base_url=base_url,
-            source=source,
-            third_party_id=third_party_id,
-            timeout_seconds=args.timeout_seconds,
-        )
+        return YuntingClient(base_url=base_url, access_token=access_token, timeout_seconds=args.timeout_seconds)
+    source = env("YUNTING_SOURCE")
+    third_party_id = env("YUNTING_THIRD_PARTY_ID")
+    if not source or not third_party_id:
+        raise SystemExit("Set YUNTING_ACCESS_TOKEN or both YUNTING_SOURCE and YUNTING_THIRD_PARTY_ID.")
+    return YuntingClient.from_source(
+        base_url=base_url,
+        source=source,
+        third_party_id=third_party_id,
+        timeout_seconds=args.timeout_seconds,
+    )
+
+
+def cmd_pull_latest_10(args: argparse.Namespace) -> None:
+    start_time, end_time = (args.start_time, args.end_time) if args.start_time and args.end_time else default_time_window(args.days)
+    client = _build_yunting_client(args)
     project_id = args.project_id or env("YUNTING_PROJECT_ID")
     if not client.access_token or not project_id:
         raise SystemExit("YUNTING_PROJECT_ID is required for real API pulls.")
@@ -51,6 +54,42 @@ def cmd_pull_latest_10(args: argparse.Namespace) -> None:
     preview_path = data_root / "raw" / current_run_id / "message_tree_preview.json"
     preview_path.write_text(json.dumps(preview, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"run_id": current_run_id, "session_count": len(sessions), "preview_path": str(preview_path)}, ensure_ascii=False, indent=2))
+
+
+def cmd_pull_range(args: argparse.Namespace) -> None:
+    if not args.start_time or not args.end_time:
+        raise SystemExit("--start-time and --end-time are required for pull-range.")
+    client = _build_yunting_client(args)
+    project_id = args.project_id or env("YUNTING_PROJECT_ID")
+    if not client.access_token or not project_id:
+        raise SystemExit("YUNTING_PROJECT_ID is required for real API pulls.")
+    current_run_id = args.run_id or run_id()
+    sessions, pages = client.pull_service_pages(
+        project_id=project_id,
+        start_time=args.start_time,
+        end_time=args.end_time,
+        max_pages=args.max_pages,
+        sleep_seconds=args.sleep_seconds,
+    )
+    data_root = Path(args.data_root)
+    write_raw_run(data_root, current_run_id, sessions, pages)
+    preview = message_tree_preview(sessions[: args.preview_sessions])
+    preview_path = data_root / "raw" / current_run_id / "message_tree_preview.json"
+    preview_path.write_text(json.dumps(preview, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(
+        json.dumps(
+            {
+                "run_id": current_run_id,
+                "start_time": args.start_time,
+                "end_time": args.end_time,
+                "page_count": len(pages),
+                "session_count": len(sessions),
+                "preview_path": str(preview_path),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 def _load_sessions_arg(args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -162,6 +201,19 @@ def build_parser() -> argparse.ArgumentParser:
     pull.add_argument("--limit", type=int, default=10)
     pull.add_argument("--timeout-seconds", type=float, default=60.0)
     pull.set_defaults(func=cmd_pull_latest_10)
+
+    pull_range = sub.add_parser("pull-range", help="Pull all Yunting service pages for a time window into gitignored data/yunting.")
+    pull_range.add_argument("--data-root", default=str(DEFAULT_DATA_ROOT))
+    pull_range.add_argument("--run-id", default="")
+    pull_range.add_argument("--base-url", default="")
+    pull_range.add_argument("--project-id", default="")
+    pull_range.add_argument("--start-time", required=True)
+    pull_range.add_argument("--end-time", required=True)
+    pull_range.add_argument("--max-pages", type=int, default=0, help="0 means pull until hasMore is false.")
+    pull_range.add_argument("--sleep-seconds", type=float, default=0.0)
+    pull_range.add_argument("--preview-sessions", type=int, default=10)
+    pull_range.add_argument("--timeout-seconds", type=float, default=60.0)
+    pull_range.set_defaults(func=cmd_pull_range)
 
     layers = sub.add_parser("dry-run-layers", help="Build Doris/Qdrant layer JSONL from raw Yunting JSON.")
     layers.add_argument("--input-file", default="")
